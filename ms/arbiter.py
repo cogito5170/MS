@@ -74,9 +74,11 @@ class WalpArbiter:
             return Decision(DENY, "A1", [f"도구 {p.tool} 는 이 맥락에서 제안되지 않았다"])
         if p.target not in ctx.seen:
             how = ctx.decisions.get(p.target)
-            if how in ("SUMMARIZE", "RETRIEVE"):
+            if how in ("SUMMARIZE", "RETRIEVE", "DEFER"):
                 h = next((k for k, v in ctx.handles.items() if p.target in v["ids"]), "?")
                 return Decision(DENY, "A2", [f"{p.target} 는 요약 · 손잡이로만 봤다 -- retrieve {h} 먼저"])
+            if how == "DROP":
+                return Decision(DENY, "A2", [f"{p.target} 는 맥락 정책이 뺐다(DROP) -- LLM 이 본 적 없다"])
             return Decision(DENY, "A2", [f"{p.target} 는 LLM 이 본 적 없는 개체다"])
         if p.target not in offer["targets"]:
             return Decision(DENY, "A3", [f"{p.target} 는 {p.tool} 의 대상이 아니다"])

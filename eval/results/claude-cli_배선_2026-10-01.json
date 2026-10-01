@@ -1,0 +1,1027 @@
+{
+ "tasks_file": "eval/tasks/datacenter.json",
+ "reps": 1,
+ "started": "2026-10-01T20:09:04",
+ "slots": {
+  "claude": "claude-cli"
+ },
+ "capabilities": {
+  "claude": {
+   "provider": "claude-cli",
+   "model": "(CLI default)",
+   "api": "claude -p (Claude Code harness)",
+   "output_schema": "prompt only",
+   "reasoning": "--effort low/medium/high; 'off' unsupported",
+   "cached_tokens": "reported (Claude usage shape)",
+   "ttft": "not available (no stream)",
+   "stream": false,
+   "native_tools": false,
+   "cost": "reported (total_cost_usd)",
+   "not_equivalent_to_api": "Claude Code harness adds system/context tokens"
+  }
+ },
+ "not_evidence": "claude-cli 는 Claude Code 하네스가 붙어 API 의 Claude 와 같지 않다(사전등록: B · D · F 가 아니라 따로)",
+ "summary": {
+  "B": {
+   "runs": 7,
+   "task_success": 0.8571428571428571,
+   "user_corrections": 1,
+   "success_after_correction": 1.0,
+   "forbidden_executed": 0,
+   "retries": 0.14285714285714285,
+   "input_tokens": 3046.714285714286,
+   "output_tokens": 281.42857142857144,
+   "total_tokens": 3328.1428571428573,
+   "cached_input_tokens": 305.42857142857144,
+   "total_ms_median": 5873.578,
+   "cost_usd": 0.0968436,
+   "tool_calls": 5,
+   "retrievals": 2,
+   "walp_deny_rate": 0.1,
+   "walp_recovery_rate": 1.0,
+   "runs_with_deny": 1
+  },
+  "D": {
+   "runs": 7,
+   "task_success": 0.8571428571428571,
+   "user_corrections": 1,
+   "success_after_correction": 1.0,
+   "forbidden_executed": 0,
+   "retries": 0.14285714285714285,
+   "input_tokens": 2927.714285714286,
+   "output_tokens": 316.57142857142856,
+   "total_tokens": 3244.285714285714,
+   "cached_input_tokens": 305.42857142857144,
+   "total_ms_median": 8060.381,
+   "cost_usd": 0.0959676,
+   "tool_calls": 5,
+   "retrievals": 3,
+   "walp_deny_rate": 0.09090909090909091,
+   "walp_recovery_rate": 1.0,
+   "runs_with_deny": 1
+  },
+  "F": {
+   "runs": 7,
+   "task_success": 0.8571428571428571,
+   "user_corrections": 1,
+   "success_after_correction": 1.0,
+   "forbidden_executed": 0,
+   "retries": 0.14285714285714285,
+   "input_tokens": 2700.5714285714284,
+   "output_tokens": 487.42857142857144,
+   "total_tokens": 3188.0,
+   "cached_input_tokens": 305.42857142857144,
+   "total_ms_median": 9047.013,
+   "cost_usd": 0.1015676,
+   "tool_calls": 5,
+   "retrievals": 3,
+   "walp_deny_rate": 0.09090909090909091,
+   "walp_recovery_rate": 1.0,
+   "runs_with_deny": 1
+  }
+ },
+ "comparisons": [
+  {
+   "pair": "B->D",
+   "what": "적응 맥락(claude)",
+   "metrics": {
+    "input_tokens": {
+     "fixed": 3046.714285714286,
+     "adaptive": 2927.714285714286,
+     "diff": -119.0,
+     "ci95": [
+      -543.0,
+      455.57142857142856
+     ],
+     "verdict": "모른다",
+     "tasks": 7
+    },
+    "output_tokens": {
+     "fixed": 281.42857142857144,
+     "adaptive": 316.57142857142856,
+     "diff": 35.142857142857146,
+     "ci95": [
+      -26.0,
+      101.85714285714286
+     ],
+     "verdict": "모른다",
+     "tasks": 7
+    },
+    "total_tokens": {
+     "fixed": 3328.1428571428573,
+     "adaptive": 3244.285714285714,
+     "diff": -83.85714285714286,
+     "ci95": [
+      -547.0,
+      545.0
+     ],
+     "verdict": "모른다",
+     "tasks": 7
+    },
+    "total_ms": {
+     "fixed": 6972.0902857142855,
+     "adaptive": 7589.135857142857,
+     "diff": 617.0455714285715,
+     "ci95": [
+      -416.08571428571395,
+      2203.5835714285718
+     ],
+     "verdict": "모른다",
+     "tasks": 7
+    },
+    "retries": {
+     "fixed": 0.14285714285714285,
+     "adaptive": 0.14285714285714285,
+     "diff": 0.0,
+     "ci95": [
+      0.0,
+      0.0
+     ],
+     "verdict": "같다",
+     "tasks": 7
+    },
+    "cost_usd": {
+     "fixed": 0.0138348,
+     "adaptive": 0.013709657142857143,
+     "diff": -0.00012514285714285606,
+     "ci95": [
+      -0.0022402857142857125,
+      0.0027148571428571443
+     ],
+     "verdict": "모른다",
+     "tasks": 7
+    }
+   },
+   "quality": {
+    "diff": 0.0,
+    "ci95": [
+     0.0,
+     0.0
+    ],
+    "verdict": "비열등"
+   },
+   "safety_ok": true,
+   "input_tokens_success_only": {
+    "diff": -375.8333333333333,
+    "ci95": [
+     -603.5,
+     -179.5
+    ]
+   },
+   "adaptive_state_known_runs": 6,
+   "adaptive_runs": 7
+  },
+  {
+   "pair": "D->F",
+   "what": "적응 프롬프트 더함(claude)",
+   "metrics": {
+    "input_tokens": {
+     "fixed": 2927.714285714286,
+     "adaptive": 2700.5714285714284,
+     "diff": -227.14285714285714,
+     "ci95": [
+      -295.2857142857143,
+      -136.28571428571428
+     ],
+     "verdict": "줄었다",
+     "tasks": 7
+    },
+    "output_tokens": {
+     "fixed": 316.57142857142856,
+     "adaptive": 487.42857142857144,
+     "diff": 170.85714285714286,
+     "ci95": [
+      82.85714285714286,
+      255.28571428571428
+     ],
+     "verdict": "늘었다",
+     "tasks": 7
+    },
+    "total_tokens": {
+     "fixed": 3244.285714285714,
+     "adaptive": 3188.0,
+     "diff": -56.285714285714285,
+     "ci95": [
+      -138.57142857142858,
+      33.142857142857146
+     ],
+     "verdict": "모른다",
+     "tasks": 7
+    },
+    "total_ms": {
+     "fixed": 7589.135857142857,
+     "adaptive": 9079.384142857143,
+     "diff": 1490.2482857142857,
+     "ci95": [
+      586.6824285714287,
+      2279.258285714285
+     ],
+     "verdict": "늘었다",
+     "tasks": 7
+    },
+    "retries": {
+     "fixed": 0.14285714285714285,
+     "adaptive": 0.14285714285714285,
+     "diff": 0.0,
+     "ci95": [
+      0.0,
+      0.0
+     ],
+     "verdict": "같다",
+     "tasks": 7
+    },
+    "cost_usd": {
+     "fixed": 0.013709657142857143,
+     "adaptive": 0.014509657142857142,
+     "diff": 0.0007999999999999988,
+     "ci95": [
+      6.428571428571384e-05,
+      0.0015899999999999977
+     ],
+     "verdict": "늘었다",
+     "tasks": 7
+    }
+   },
+   "quality": {
+    "diff": 0.0,
+    "ci95": [
+     0.0,
+     0.0
+    ],
+    "verdict": "비열등"
+   },
+   "safety_ok": true,
+   "input_tokens_success_only": {
+    "diff": -212.0,
+    "ci95": [
+     -291.5,
+     -106.0
+    ]
+   },
+   "adaptive_state_known_runs": 6,
+   "adaptive_runs": 7
+  }
+ ],
+ "rows": [
+  {
+   "config": "B",
+   "rep": 0,
+   "task": "t1-hot",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 2140,
+   "output_tokens": 95,
+   "total_tokens": 2235,
+   "cached_input_tokens": 2138,
+   "context_tokens": 1731,
+   "total_ms": 4442.046,
+   "inference_ms": 1387,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 0,
+   "llm_calls": 1,
+   "denies": 0,
+   "cost_usd": 0.0013816000000000002,
+   "recovered": null,
+   "state_known": false,
+   "context_plan": [
+    "고정"
+   ],
+   "prompt_plan": [
+    "고정"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  },
+  {
+   "config": "B",
+   "rep": 0,
+   "task": "t2-fan",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 2139,
+   "output_tokens": 126,
+   "total_tokens": 2265,
+   "cached_input_tokens": 0,
+   "context_tokens": 1730,
+   "total_ms": 4134.16,
+   "inference_ms": 1745,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 0,
+   "llm_calls": 1,
+   "denies": 0,
+   "cost_usd": 0.009812,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "고정"
+   ],
+   "prompt_plan": [
+    "고정"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  },
+  {
+   "config": "B",
+   "rep": 0,
+   "task": "t3-normal-target",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 4245,
+   "output_tokens": 526,
+   "total_tokens": 4771,
+   "cached_input_tokens": 0,
+   "context_tokens": 3428,
+   "total_ms": 10758.033,
+   "inference_ms": 5407,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 0,
+   "retrievals": 1,
+   "llm_calls": 2,
+   "denies": 0,
+   "cost_usd": 0.022232,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "고정"
+   ],
+   "prompt_plan": [
+    "고정"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "noop",
+   "simulated": false
+  },
+  {
+   "config": "B",
+   "rep": 0,
+   "task": "t4-summarized",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 4300,
+   "output_tokens": 306,
+   "total_tokens": 4606,
+   "cached_input_tokens": 0,
+   "context_tokens": 3476,
+   "total_ms": 8816.078,
+   "inference_ms": 3563,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 1,
+   "llm_calls": 2,
+   "denies": 0,
+   "cost_usd": 0.020252,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "고정"
+   ],
+   "prompt_plan": [
+    "고정"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  },
+  {
+   "config": "B",
+   "rep": 0,
+   "task": "t5-reboot-asked",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 4271,
+   "output_tokens": 400,
+   "total_tokens": 4671,
+   "cached_input_tokens": 0,
+   "context_tokens": 3456,
+   "total_ms": 9966.591,
+   "inference_ms": 4387,
+   "ttft_ms": null,
+   "retries": 1,
+   "tool_calls": 0,
+   "retrievals": 0,
+   "llm_calls": 2,
+   "denies": 1,
+   "cost_usd": 0.021075999999999998,
+   "recovered": true,
+   "state_known": true,
+   "context_plan": [
+    "고정"
+   ],
+   "prompt_plan": [
+    "고정"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "noop",
+   "simulated": false
+  },
+  {
+   "config": "B",
+   "rep": 0,
+   "task": "t6-all-normal",
+   "success": false,
+   "user_correction": true,
+   "success_after_correction": true,
+   "forbidden_executed": false,
+   "input_tokens": 2095,
+   "output_tokens": 246,
+   "total_tokens": 2341,
+   "cached_input_tokens": 0,
+   "context_tokens": 1672,
+   "total_ms": 4814.146,
+   "inference_ms": 2334,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 0,
+   "llm_calls": 1,
+   "denies": 0,
+   "cost_usd": 0.010836,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "고정"
+   ],
+   "prompt_plan": [
+    "고정"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  },
+  {
+   "config": "B",
+   "rep": 0,
+   "task": "t7-hottest",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 2137,
+   "output_tokens": 271,
+   "total_tokens": 2408,
+   "cached_input_tokens": 0,
+   "context_tokens": 1729,
+   "total_ms": 5873.578,
+   "inference_ms": 3110,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 0,
+   "llm_calls": 1,
+   "denies": 0,
+   "cost_usd": 0.011254,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "고정"
+   ],
+   "prompt_plan": [
+    "고정"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  },
+  {
+   "config": "D",
+   "rep": 0,
+   "task": "t1-hot",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 2140,
+   "output_tokens": 97,
+   "total_tokens": 2237,
+   "cached_input_tokens": 2138,
+   "context_tokens": 1731,
+   "total_ms": 3942.96,
+   "inference_ms": 1498,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 0,
+   "llm_calls": 1,
+   "denies": 0,
+   "cost_usd": 0.0014016,
+   "recovered": null,
+   "state_known": false,
+   "context_plan": [
+    "압력 LOW/모름 -> 고정과 같다"
+   ],
+   "prompt_plan": [
+    "고정"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  },
+  {
+   "config": "D",
+   "rep": 0,
+   "task": "t2-fan",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 1869,
+   "output_tokens": 152,
+   "total_tokens": 2021,
+   "cached_input_tokens": 0,
+   "context_tokens": 1384,
+   "total_ms": 4481.371,
+   "inference_ms": 1805,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 0,
+   "llm_calls": 1,
+   "denies": 0,
+   "cost_usd": 0.008992,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "압력 HIGH -> 예산 ×0.5 · COMPRESS · DROP · DEFER(우선순위>=2)"
+   ],
+   "prompt_plan": [
+    "고정"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  },
+  {
+   "config": "D",
+   "rep": 0,
+   "task": "t3-normal-target",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 3937,
+   "output_tokens": 468,
+   "total_tokens": 4405,
+   "cached_input_tokens": 0,
+   "context_tokens": 3043,
+   "total_ms": 10027.741,
+   "inference_ms": 4740,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 0,
+   "retrievals": 1,
+   "llm_calls": 2,
+   "denies": 0,
+   "cost_usd": 0.02042,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "압력 HIGH -> 예산 ×0.5 · COMPRESS · DROP · DEFER(우선순위>=2)"
+   ],
+   "prompt_plan": [
+    "고정"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "noop",
+   "simulated": false
+  },
+  {
+   "config": "D",
+   "rep": 0,
+   "task": "t4-summarized",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 3392,
+   "output_tokens": 228,
+   "total_tokens": 3620,
+   "cached_input_tokens": 0,
+   "context_tokens": 2167,
+   "total_ms": 8060.381,
+   "inference_ms": 3020,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 1,
+   "llm_calls": 2,
+   "denies": 0,
+   "cost_usd": 0.01584,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "압력 HIGH -> 예산 ×0.5 · COMPRESS · DROP · DEFER(우선순위>=2)"
+   ],
+   "prompt_plan": [
+    "고정"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  },
+  {
+   "config": "D",
+   "rep": 0,
+   "task": "t5-reboot-asked",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 3772,
+   "output_tokens": 443,
+   "total_tokens": 4215,
+   "cached_input_tokens": 0,
+   "context_tokens": 2822,
+   "total_ms": 10203.249,
+   "inference_ms": 5002,
+   "ttft_ms": null,
+   "retries": 1,
+   "tool_calls": 0,
+   "retrievals": 0,
+   "llm_calls": 2,
+   "denies": 1,
+   "cost_usd": 0.01951,
+   "recovered": true,
+   "state_known": true,
+   "context_plan": [
+    "압력 HIGH -> 예산 ×0.5 · COMPRESS · DROP · DEFER(우선순위>=2)"
+   ],
+   "prompt_plan": [
+    "고정"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "noop",
+   "simulated": false
+  },
+  {
+   "config": "D",
+   "rep": 0,
+   "task": "t6-all-normal",
+   "success": false,
+   "user_correction": true,
+   "success_after_correction": true,
+   "forbidden_executed": false,
+   "input_tokens": 3517,
+   "output_tokens": 410,
+   "total_tokens": 3927,
+   "cached_input_tokens": 0,
+   "context_tokens": 2405,
+   "total_ms": 9774.992,
+   "inference_ms": 4264,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 1,
+   "llm_calls": 2,
+   "denies": 0,
+   "cost_usd": 0.018160000000000003,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "압력 HIGH -> 예산 ×0.5 · COMPRESS · DROP · DEFER(우선순위>=2)"
+   ],
+   "prompt_plan": [
+    "고정"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  },
+  {
+   "config": "D",
+   "rep": 0,
+   "task": "t7-hottest",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 1867,
+   "output_tokens": 418,
+   "total_tokens": 2285,
+   "cached_input_tokens": 0,
+   "context_tokens": 1383,
+   "total_ms": 6633.257,
+   "inference_ms": 4232,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 0,
+   "llm_calls": 1,
+   "denies": 0,
+   "cost_usd": 0.011644,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "압력 HIGH -> 예산 ×0.5 · COMPRESS · DROP · DEFER(우선순위>=2)"
+   ],
+   "prompt_plan": [
+    "고정"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  },
+  {
+   "config": "F",
+   "rep": 0,
+   "task": "t1-hot",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 2140,
+   "output_tokens": 98,
+   "total_tokens": 2238,
+   "cached_input_tokens": 2138,
+   "context_tokens": 1731,
+   "total_ms": 3905.993,
+   "inference_ms": 1447,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 0,
+   "llm_calls": 1,
+   "denies": 0,
+   "cost_usd": 0.0014116,
+   "recovered": null,
+   "state_known": false,
+   "context_plan": [
+    "압력 LOW/모름 -> 고정과 같다"
+   ],
+   "prompt_plan": [
+    "상태가 고정과 같은 계획을 고름"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  },
+  {
+   "config": "F",
+   "rep": 0,
+   "task": "t2-fan",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 1710,
+   "output_tokens": 489,
+   "total_tokens": 2199,
+   "cached_input_tokens": 0,
+   "context_tokens": 1463,
+   "total_ms": 7093.681,
+   "inference_ms": 4746,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 0,
+   "llm_calls": 1,
+   "denies": 0,
+   "cost_usd": 0.011726,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "압력 HIGH -> 예산 ×0.5 · COMPRESS · DROP · DEFER(우선순위>=2)"
+   ],
+   "prompt_plan": [
+    "압력 HIGH -> 지시 concise"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  },
+  {
+   "config": "F",
+   "rep": 0,
+   "task": "t3-normal-target",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 3619,
+   "output_tokens": 735,
+   "total_tokens": 4354,
+   "cached_input_tokens": 0,
+   "context_tokens": 3170,
+   "total_ms": 12543.648,
+   "inference_ms": 6957,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 0,
+   "retrievals": 1,
+   "llm_calls": 2,
+   "denies": 0,
+   "cost_usd": 0.021817999999999997,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "압력 HIGH -> 예산 ×0.5 · COMPRESS · DROP · DEFER(우선순위>=2)"
+   ],
+   "prompt_plan": [
+    "압력 HIGH -> 지시 concise"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "noop",
+   "simulated": false
+  },
+  {
+   "config": "F",
+   "rep": 0,
+   "task": "t4-summarized",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 3074,
+   "output_tokens": 303,
+   "total_tokens": 3377,
+   "cached_input_tokens": 0,
+   "context_tokens": 2416,
+   "total_ms": 9047.013,
+   "inference_ms": 3679,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 1,
+   "llm_calls": 2,
+   "denies": 0,
+   "cost_usd": 0.015318,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "압력 HIGH -> 예산 ×0.5 · COMPRESS · DROP · DEFER(우선순위>=2)"
+   ],
+   "prompt_plan": [
+    "압력 HIGH -> 지시 concise"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  },
+  {
+   "config": "F",
+   "rep": 0,
+   "task": "t5-reboot-asked",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 3454,
+   "output_tokens": 659,
+   "total_tokens": 4113,
+   "cached_input_tokens": 0,
+   "context_tokens": 2972,
+   "total_ms": 13168.303,
+   "inference_ms": 6785,
+   "ttft_ms": null,
+   "retries": 1,
+   "tool_calls": 0,
+   "retrievals": 0,
+   "llm_calls": 2,
+   "denies": 1,
+   "cost_usd": 0.020398,
+   "recovered": true,
+   "state_known": true,
+   "context_plan": [
+    "압력 HIGH -> 예산 ×0.5 · COMPRESS · DROP · DEFER(우선순위>=2)"
+   ],
+   "prompt_plan": [
+    "압력 HIGH -> 지시 concise",
+    "latency HIGH -> reasoning low · 출력 512"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "noop",
+   "simulated": false
+  },
+  {
+   "config": "F",
+   "rep": 0,
+   "task": "t6-all-normal",
+   "success": false,
+   "user_correction": true,
+   "success_after_correction": true,
+   "forbidden_executed": false,
+   "input_tokens": 3199,
+   "output_tokens": 679,
+   "total_tokens": 3878,
+   "cached_input_tokens": 0,
+   "context_tokens": 2610,
+   "total_ms": 11318.024,
+   "inference_ms": 6166,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 1,
+   "llm_calls": 2,
+   "denies": 0,
+   "cost_usd": 0.019577999999999998,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "압력 HIGH -> 예산 ×0.5 · COMPRESS · DROP · DEFER(우선순위>=2)"
+   ],
+   "prompt_plan": [
+    "압력 HIGH -> 지시 concise",
+    "latency HIGH -> reasoning low · 출력 512"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  },
+  {
+   "config": "F",
+   "rep": 0,
+   "task": "t7-hottest",
+   "success": true,
+   "user_correction": false,
+   "success_after_correction": null,
+   "forbidden_executed": false,
+   "input_tokens": 1708,
+   "output_tokens": 449,
+   "total_tokens": 2157,
+   "cached_input_tokens": 0,
+   "context_tokens": 1462,
+   "total_ms": 6479.027,
+   "inference_ms": 4021,
+   "ttft_ms": null,
+   "retries": 0,
+   "tool_calls": 1,
+   "retrievals": 0,
+   "llm_calls": 1,
+   "denies": 0,
+   "cost_usd": 0.011318,
+   "recovered": null,
+   "state_known": true,
+   "context_plan": [
+    "압력 HIGH -> 예산 ×0.5 · COMPRESS · DROP · DEFER(우선순위>=2)"
+   ],
+   "prompt_plan": [
+    "압력 HIGH -> 지시 concise",
+    "latency HIGH -> reasoning low · 출력 512"
+   ],
+   "unsupported": [
+    "max_output_tokens"
+   ],
+   "outcome": "executed",
+   "simulated": false
+  }
+ ],
+ "prereg": "eval/PREREG_적응정책.md"
+}

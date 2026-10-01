@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ms"
-version = "0.1.0"
-description = "Model-State 층 -- 텔레메트리 -> 모형 · 상태 그래프 -> 질의 -> 맥락 정책 -> LLM 제안 -> WALP 중재자 -> 도구"
+version = "0.2.0"
+description = "MS -- LLM Policy Runtime: provider 독립 텔레메트리 · 상태 · 맥락/프롬프트/provider 정책 · WALP 중재자"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
@@ -14,7 +14,7 @@ dependencies = []
 ms = "ms.cli:main"
 
 [tool.setuptools]
-packages = ["ms"]
+packages = ["ms", "ms.providers"]
 
 [tool.setuptools.package-data]
 ms = ["examples/*.json", "examples/*.jsonl"]

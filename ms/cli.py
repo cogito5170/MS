@@ -6,6 +6,12 @@
     python3 -m ms context SPEC --telemetry T.jsonl --task "..."   # LLM 에 갈 최소 맥락만(LLM 안 부름)
     python3 -m ms run     SPEC --telemetry T.jsonl --task "..." --llm "claude -p" [--grant reboot] [--ledger a.jsonl]
 
+    # Policy Runtime (MS API): 상태 -> 정책 -> provider -> 제안 -> WALP, 실행은 정규 텔레메트리로 상태에 되돌아간다
+    python3 -m ms ask  SPEC --telemetry T.jsonl --task "..." --provider claude-cli [--model M]
+                       [--context adaptive] [--prompt adaptive] [--stream] [--json]
+    python3 -m ms eval --tasks eval/tasks/datacenter.json --openai openai:<모형> --claude claude:claude-opus-5-5
+                       [--configs A,B,C,D,E,F] [--reps 3] [--out eval/results/이름]
+
 SPEC 은 JSON: models · relationships · entities · edges · tools · queries · policy · grants · (선택) now.
 `now` 가 있으면 시계를 그 값에 고정한다(예시 · 재현용). 없으면 지금 시각.
 """
@@ -87,6 +93,26 @@ def _print_run(res, ctx_text=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="ms", description="Model-State 층")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("ask")
+    s.add_argument("spec")
+    s.add_argument("--telemetry")
+    s.add_argument("--task", required=True)
+    s.add_argument("--provider", required=True, help="openai · claude · gemini · claude-cli · sim-openai ...")
+    s.add_argument("--model")
+    s.add_argument("--context", choices=("fixed", "adaptive"), default="fixed")
+    s.add_argument("--prompt", choices=("fixed", "adaptive"), default="fixed")
+    s.add_argument("--stream", action="store_true")
+    s.add_argument("--grant", action="append", default=[])
+    s.add_argument("--ledger")
+    s.add_argument("--budget", type=int)
+    s.add_argument("--json", action="store_true")
+    s = sub.add_parser("eval")
+    s.add_argument("--tasks", required=True)
+    s.add_argument("--openai", help="openai 자리: openai:<모형> · sim-openai")
+    s.add_argument("--claude", help="claude 자리: claude:<모형> · claude-cli[:모형] · sim-claude")
+    s.add_argument("--configs", default="A,B,C,D,E,F")
+    s.add_argument("--reps", type=int, default=3)
+    s.add_argument("--out", help="결과를 <out>.json · <out>.md 로")
     for name in ("demo", "ingest", "context", "run"):
         s = sub.add_parser(name)
         if name != "demo":
@@ -104,6 +130,10 @@ def main(argv=None):
         s.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
 
+    if a.cmd == "eval":
+        return _eval(a)
+    if a.cmd == "ask":
+        return _ask(a)
     if a.cmd == "demo":
         spec, m, reg, _ = load(DEMO_SPEC, DEMO_TELEMETRY)
         task = DEMO_TASK
@@ -142,3 +172,48 @@ def main(argv=None):
     else:
         _print_run(res)
     return 0 if res.outcome in ("executed", "noop") else 1
+
+
+def _ask(a):
+    from .policy import AdaptiveContext, AdaptivePrompt, FixedContext, FixedPrompt
+    from .providers import make_provider
+    from .runtime import Runtime
+    spec, m, reg, _ = load(a.spec, a.telemetry)
+    prov = make_provider(a.provider, a.model)
+    base = dict(spec.get("policy") or {})
+    if a.budget is not None:
+        base["budget_chars"] = a.budget
+    rt = Runtime(m, reg, {a.provider: prov}, grants=set(spec.get("grants") or []) | set(a.grant),
+                 context_selector=AdaptiveContext() if a.context == "adaptive" else FixedContext(),
+                 prompt_selector=AdaptivePrompt() if a.prompt == "adaptive" else FixedPrompt(),
+                 base_context=base, ledger_path=a.ledger)
+    rt.open_session("cli", spec.get("budgets") or {})
+    out = rt.handle({"session": "cli", "task": a.task, "queries": spec.get("queries", ()), "stream": a.stream})
+    if a.json:
+        print(json.dumps(out, ensure_ascii=False))
+    else:
+        _print_run(_Res(out["result"]))
+        r = out["record"]
+        print(f"\n[telemetry] provider={r['run']['provider']} model={r['run']['model']} tokens={r['tokens']} "
+              f"latency={r['latency']} cost={r['cost']} unsupported={r['unsupported']}")
+    return 0 if out["result"]["outcome"] in ("executed", "noop") else 1
+
+
+class _Res:
+    def __init__(self, d):
+        self.rounds, self.ingested, self.outcome = d["rounds"], d["ingested"], d["outcome"]
+
+
+def _eval(a):
+    from .eval import evaluate, report_md
+    slots = {k: v for k, v in (("openai", a.openai), ("claude", a.claude)) if v}
+    rep = evaluate(a.tasks, slots, tuple(c.strip() for c in a.configs.split(",") if c.strip()), a.reps)
+    md = report_md(rep)
+    if a.out:
+        with open(a.out + ".json", "w", encoding="utf-8") as f:
+            json.dump(rep, f, ensure_ascii=False, indent=1)
+        with open(a.out + ".md", "w", encoding="utf-8") as f:
+            f.write(md + "\n")
+        print(f"-> {a.out}.json · {a.out}.md")
+    print(md)
+    return 0

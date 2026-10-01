@@ -10,7 +10,8 @@ StateQuery (JSON 으로도 적는다):
      "select": ["temp_c", "status"],       # 생략하면 전부. 행에 실리는 속성은 이것뿐이다
      "order_by": ["temp_c", "desc"], "limit": 50,
      "priority": 0,                        # 작을수록 먼저 KEEP
-     "must": [["status", "==", "critical"]]}   # 맞는 행은 예산을 넘어도 KEEP
+     "must": [["status", "==", "critical"]],   # 맞는 행은 예산을 넘어도 KEEP
+     "droppable": [["status", "==", "normal"]]}   # 맥락 정책이 drop 을 켜면 뺄 수 있는 행(must 가 이긴다)
 
 행에는 고른 속성의 값 · 나이 · 낡음 여부와, **결과 안의 개체끼리의** 관계만 실린다. 결과 밖 개체의 id 는 안 실린다.
 
@@ -37,11 +38,12 @@ class StateQuery:
     limit: int = 100
     priority: int = 0
     must: list = field(default_factory=list)
+    droppable: list = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict) -> "StateQuery":
         q = cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
-        for p in list(q.where) + list(q.must):
+        for p in list(q.where) + list(q.must) + list(q.droppable):
             bad = predicate.check(p)
             if bad:
                 raise ValueError(f"질의 {q.name}: {bad[0]}")
@@ -77,6 +79,7 @@ class QueryResult:
     rows: list
     matched: int            # limit 전 개수
     priority: int = 0
+    droppable: list = field(default_factory=list)
 
 
 def run_query(q: StateQuery, manager) -> QueryResult:
@@ -120,7 +123,7 @@ def run_query(q: StateQuery, manager) -> QueryResult:
         edges = sorted([list(e) for e in g.edges if (e[1] == n.id and e[2] in ids)])
         rows.append(Row(n.id, n.model, n.version, props, predicate.all_hold(q.must, n.values()) if q.must else False,
                         edges))
-    return QueryResult(q.name, rows, matched, q.priority)
+    return QueryResult(q.name, rows, matched, q.priority, list(q.droppable))
 
 
 @dataclass

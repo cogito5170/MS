@@ -6,15 +6,18 @@
                  stale     이미 더 새로운 관측이 있다(늦게 온 것) -- 덮어쓰지 않는다
 
 unbound · rejected 는 격리함(`quarantine`)에 마지막 몇 개만 남는다. 그래프에는 절대 안 들어간다.
+
+모형이 `role: evidence` 로 적은 속성은 그래프가 아니라 `evidence` 창(최근 `window` 개)에 쌓이고, 파생 상태의 입력으로만 쓰인다.
+그래서 질의(→ LLM)로는 원 측정이 보이지 않는다 -- 보이는 것은 모형이 해석한 상태뿐이다.
 """
 from __future__ import annotations
 
 import time
-from collections import Counter, deque
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 
 from .graph import StateGraph, Value
-from .model import Model, ModelError, RelationshipSpec
+from .model import Model, ModelError, RelationshipSpec, aggregate
 from .telemetry import Telemetry
 
 APPLIED, UNBOUND, REJECTED, STALE = "applied", "unbound", "rejected", "stale"
@@ -36,6 +39,7 @@ class StateManager:
         self.clock = clock
         self.counts: Counter = Counter()
         self.quarantine: deque = deque(maxlen=quarantine_size)
+        self.evidence: dict = defaultdict(dict)       # 개체 -> 속성 -> deque[Value] (그래프 밖)
         for m in models:
             self.add_model(m)
         for r in relationships:
@@ -101,9 +105,19 @@ class StateManager:
             raw = b.interpret(t.value)
         except Exception as e:     # 변환이 터지는 것도 '이 값은 상태가 못 된다' 이다
             return self._refuse(REJECTED, t, f"변환 실패: {e}")
-        val, problem = model.properties[b.property].validate(raw)
+        spec = model.properties[b.property]
+        val, problem = spec.validate(raw)
         if problem:
             return self._refuse(REJECTED, t, problem)
+        if spec.role == "evidence":
+            win = self.evidence[node.id].get(b.property)
+            if win is not None and win and win[-1].ts > t.ts:
+                return self._refuse(STALE, t, f"{b.property} 는 이미 더 새로운 관측({win[-1].src})이 있다")
+            if win is None:
+                win = self.evidence[node.id][b.property] = deque(maxlen=int(spec.window))
+            win.append(Value(val, t.ts, t.id))
+            self.counts[APPLIED] += 1
+            return IngestResult(APPLIED, t.id, "", self._derive(node.id))
         cur = node.props.get(b.property)
         if cur is not None and cur.ts > t.ts:
             return self._refuse(STALE, t, f"{b.property} 는 이미 더 새로운 관측({cur.src})이 있다")
@@ -119,6 +133,10 @@ class StateManager:
         node = self.graph.nodes[nid]
         model = self.models[node.model]
         base = {k: v.value for k, v in node.props.items() if not v.derived}
+        when = {k: v.ts for k, v in node.props.items() if not v.derived}
+        for k, win in self.evidence.get(nid, {}).items():
+            base[k] = aggregate(model.properties[k].agg, [v.value for v in win])
+            when[k] = win[-1].ts
         changes = {}
         for name, d in model.derived.items():
             new = d.compute(base)
@@ -129,7 +147,7 @@ class StateManager:
                     changes[name] = (old.value, None)
                 continue
             ins = sorted(d.inputs)
-            ts = min(node.props[p].ts for p in ins) if ins else self.clock()
+            ts = min(when[p] for p in ins) if ins else self.clock()
             self.graph.set_prop(nid, name, Value(new, ts, "derived:" + ",".join(ins), derived=True))
             if old is None or old.value != new:
                 changes[name] = (None if old is None else old.value, new)
@@ -138,7 +156,17 @@ class StateManager:
     # -- 신선도 -------------------------------------------------------------
     def age(self, nid: str, prop: str):
         v = self.graph.nodes[nid].props.get(prop)
+        if v is None:
+            win = self.evidence.get(nid, {}).get(prop)
+            v = win[-1] if win else None
         return None if v is None else max(0.0, self.clock() - v.ts)
+
+    def evidence_value(self, nid: str, prop: str):
+        """evidence 의 모은 값(시험 · 진단용). 맥락 쪽은 이것을 부르지 않는다."""
+        win = self.evidence.get(nid, {}).get(prop)
+        if not win:
+            return None
+        return aggregate(self.models[self.graph.nodes[nid].model].properties[prop].agg, [v.value for v in win])
 
     def is_stale(self, nid: str, prop: str) -> bool:
         """값이 없거나 ttl 을 넘겼으면 낡았다."""

@@ -59,6 +59,18 @@ def _first_object(text: str):
     return None
 
 
+def proposal_from(resp) -> Proposal:
+    """CanonicalResponse -> Proposal. provider 의 함수 호출도 글 속 JSON 도 **제안**일 뿐이다 -- 여기서 실행되는 것은 없다."""
+    if resp.error or resp.finish in ("refusal", "error"):
+        return Proposal(error=f"응답 {resp.finish}: {resp.error}"[:300], raw=resp.text)
+    if resp.tool_calls:
+        c = resp.tool_calls[0]
+        a = c.arguments or {}
+        return parse_proposal(json.dumps({"tool": c.name, "target": a.get("target"), "args": a.get("args", {}),
+                                          "rationale": "(native tool call)"}, ensure_ascii=False))
+    return parse_proposal(resp.text)
+
+
 def parse_proposal(text: str) -> Proposal:
     obj = _first_object(text or "")
     if obj is None:
@@ -70,6 +82,11 @@ def parse_proposal(text: str) -> Proposal:
         return Proposal(tool, error="target 이 문자열이 아니다", raw=text)
     if args is None:
         args = {}
+    if isinstance(args, str):                       # json_schema 모드: args 는 JSON 문자열
+        try:
+            args = json.loads(args or "{}")
+        except ValueError:
+            return Proposal(tool, target, error="args 문자열이 JSON 이 아니다", raw=text)
     if not isinstance(args, dict):
         return Proposal(tool, target, error="args 가 객체가 아니다", raw=text)
     return Proposal(tool, target, args, str(obj.get("rationale", ""))[:500], raw=text)

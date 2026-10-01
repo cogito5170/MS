@@ -1,109 +1,229 @@
-# MS — Model-State 층
+# MS — LLM Policy Runtime
 
-텔레메트리와 LLM 사이에 **모형 · 상태 그래프 · 질의 · 맥락 정책 · 중재자**를 둔다. 표준 라이브러리만 쓴다.
+**MS 는 LLM provider 가 아니다.** OpenAI · Claude · Gemini 는 추론 provider 이고, MS 는 그 **위에서** 도는 정책 런타임(control plane)이다.
+MS 가 정하는 것은 넷이다: LLM 에게 **무엇을 보일지**(Context Policy), **어떻게 말할지**(Prompt Policy), **누구에게 물을지**(Provider Policy),
+LLM 의 제안을 **받을지**(WALP). 표준 라이브러리만 쓴다 — provider SDK 도 안 쓴다.
 
-1. **Telemetry 는 State 가 아니다.**
-2. **State 의 뜻은 Model 이 정한다.**
-3. **LLM 에는 State 전체가 아니라 Query 결과만 준다.**
-
-새 방법이 아니라 묶음이다 — 왼쪽 절반은 Azure Digital Twins(DTDL 모형 · 관계 · twin graph · 질의), 오른쪽은 CaMeL · Progent 류의
-결정론적 정책 집행, 가운데는 MemGPT 의 KEEP/SUMMARIZE/RETRIEVE 를 결정론적 정책으로 바꾼 것이다. [`paper/선행조사/MS.md`](paper/선행조사/MS.md)
+**연구 대상은 이 적응 고리다:**
 
 ```
-TELEMETRY ─► State Manager ─► MODEL + RELATIONSHIP ─► STATE GRAPH
-   ▲            manager.py       model.py                graph.py
-   │                                                         │
-   │                                     STATE QUERY + TOOL QUERY   query.py
-   │                                                         │
-   │                      CONTEXT POLICY: KEEP · SUMMARIZE · RETRIEVE   context.py
-   │                                                         │
-   │                               MINIMAL CONTEXT ─► LLM ─► PROPOSAL   llm.py
-   │                                                         │
-   │                              WALP ARBITER: ALLOW · DENY(까닭은 다음 판으로)   arbiter.py
-   │                                                         │
-   └──────────── 도구의 결과도 텔레메트리다 ◄──────── TOOL    tools.py · pipeline.py
+Telemetry → State → Context/Prompt Policy → Provider → LLM → WALP
+    ▲                                                          │
+    └────────────── 실행 결과도 Telemetry 로 돌아온다 ◄──────────┘
 ```
 
-## 원칙이 어디서 붙들리나
+> 가설(사전등록 `eval/PREREG_적응정책.md`): 텔레메트리에서 나온 State 로 Context Policy 와 Prompt Policy 를 동적으로 고르면,
+> 고정 정책보다 **품질을 지키면서** 토큰 · 지연 · 재시도 · 비용을 줄이는가? — 안전과 최소 품질은 단단한 제약이다.
+> **아직 답이 없다** (아래 "잰 것").
 
-| 원칙 | 코드 | 시험(`tests/test_ms.py`) |
+## 세 가지를 섞지 않는다
+
+| | 묻는 것 | MS 에서 | 예 |
+|---|---|---|---|
+| **Telemetry** | 무슨 일이 일어났는가 | `Telemetry` · `RunRecord` — 뜻이 없는 기록. 그래프에 바로 못 들어간다 | `input_tokens = 18000` · `cpu_temp_f = 197.6` |
+| **State** | Model 에 의해 지금 무엇을 의미하는가 | `Model` 이 해석해 `StateGraph` 에 둔 것. 원 측정(evidence)은 그래프 밖 | `token_budget_pressure = HIGH` · `srv07.status = critical` |
+| **Policy** | 지금 State 에서 무엇을 할 것인가 | `policy.py` 의 선택기 — (State, 판본)의 순수 함수 | 예산 ×0.5 · COMPRESS · 지시 concise |
+
+`input_tokens / token_budget ≥ 0.9` 를 `HIGH` 로 읽는 것은 **모형**이다(`usage_model.py`). 토큰 수 자체는 상태 그래프에 **없다** —
+모형의 `evidence` 창에만 있고, 질의로도(→ LLM 으로도) 안 보인다.
+
+## 구조
+
+```
+USER
+ ↓
+MS API                 runtime.Runtime.handle            요청 하나 = 정책 루프 한 번
+ ↓
+Request Manager        runtime.Runtime                   세션 상태를 읽고 정책 셋을 고르고, 실행을 RunRecord 로 적는다
+ ↓
+State Query            query.run_query · tool_query      그래프에서 LLM 쪽으로 나가는 유일한 길
+ ↓
+Context Policy         context.ContextPolicy             KEEP · SUMMARIZE · RETRIEVE · DROP · DEFER · COMPRESS
+ ↓                     policy.AdaptiveContext            ← State
+Prompt Policy          prompt.PromptPolicy               지시 꼴 · 맥락 꼴 · 예시 · 추론 설정 · 출력 꼴 · 도구 허용(좁히기만)
+ ↓                     policy.AdaptivePrompt             ← State
+Provider Policy        policy.ExplicitProvider           지금은 명시 선택만
+ ↓
+Provider Adapter       providers/                        CanonicalRequest → provider 요청, provider 응답 → CanonicalResponse
+ ├── OpenAI            providers/openai.py               Responses API
+ ├── Claude            providers/claude.py               Messages API      (claude_cli.py: `claude -p`, API 와 같지 않음)
+ └── Gemini            providers/gemini.py               generateContent
+ ↓
+LLM
+ ↓
+Proposal               llm.proposal_from                 글 속 JSON 이든 함수 호출이든 **제안**일 뿐이다
+ ↓
+WALP                   arbiter.WalpArbiter               ALLOW · DENY (A0~A8, 예외면 DENY)
+ ↓
+Tool                   tools.ToolSpec.run                ALLOW 가지 안에서만 불린다(호출 자리가 하나)
+ ↓
+Telemetry              run_telemetry.RunRecord           정규 텔레메트리 + 도구의 결과
+ ↓
+State Manager          manager.StateManager              Model 이 해석 → 다음 State
+```
+
+## 계층의 책임과 경계
+
+| 계층 | 하는 일 | **못 하는 일** (시험이 붙든다) |
 |---|---|---|
-| 1. Telemetry ≠ State | 그래프에 들어가는 문은 `StateManager.ingest` 하나. 개체가 없거나 모형이 모르는 신호는 `unbound`, 타입 · 범위에 지면 `rejected`, 늦게 온 것은 `stale` — 셋 다 그래프에 안 들어가고 격리함에만 남는다. 값마다 출처(텔레메트리 id)가 붙는다 | `TelemetryIsNotState` — 도구가 돌려준 `reboot_ack` 도 모형이 모르면 상태가 아니다 |
-| 2. Model 이 뜻을 정한다 | binding(신호 → 속성 + 변환) · 속성 타입/단위/범위/ttl · 파생 상태. 파생의 입력이 하나라도 없으면 default 가 아니라 **모름(None)** | `ModelDefinesMeaning` — 같은 `t=100` 이 섭씨 모형에선 critical, 화씨 모형에선 37.8°C normal |
-| 3. Query 결과만 | `ContextPolicy.build` 는 `QueryResult` 만 받는다(그래프를 안 받는다). 행에는 `select` 한 속성과 **결과 안 개체끼리의** 관계만 실린다. 도구 제안도 KEEP 으로 본 개체로 좁힌다 | `OnlyQueryResultsReachLLM` — 프롬프트에 결과 밖 개체 id 가 한 글자도 없다(양성 대조 포함) · 맥락 쪽이 `graph.dump()` 를 부르면 터진다 |
+| State Manager | 텔레메트리를 모형으로 해석해 그래프에. 모르는 신호 · 범위 밖 · 늦은 관측은 격리 | 모형 없이 상태를 만들기 |
+| Model (`model.py` · `usage_model.py`) | 신호 → 속성(변환 · 단위 · 범위 · ttl), 속성 → 파생 상태, `evidence` 창(window · agg) | 입력이 없는데 기본값으로 메우기 — 모르면 **모름** |
+| State Query | 고른 속성 · 결과 안 개체끼리의 관계만 | 그래프 전체를 내기 |
+| Context Policy | 질의 결과 → 최소 맥락. 예산은 **실제로 그려진 글자 수**에 | must 행을 빼거나 미루기 · 행을 조용히 버리기 |
+| Prompt Policy | 맥락을 어떻게 말할지 | 도구를 **넓히기**(좁히기만 된다) · WALP 를 바꾸기(import 조차 안 한다) |
+| Provider Policy | provider · 모형 고르기 | 승자를 가정하기 — 지금은 명시 선택뿐 |
+| Provider Adapter | canonical ↔ provider 번역, 사용량 정규화, provider 고유 값은 `extensions` 로 | 위 계층에 provider 모양을 흘리기 · 못 하는 옵션을 흉내 내기(`unsupported` 로 적는다) |
+| WALP | LLM 이 본 것 + 지금 상태로 ALLOW / DENY | 프롬프트 · LLM 의 말로 허가가 바뀌기 |
+| Tool | 세계에 작용하고 **관측**을 돌려준다 | 상태를 직접 쓰기 — 결과는 텔레메트리로 다시 들어간다 |
 
-## 맥락 정책
+## 원칙 열 개와 그것을 붙드는 시험
 
-결정론적이다. 예산은 **실제로 그려지는 글자 수**(`render()`)에 건다.
+| # | 원칙 | 시험 (`tests/test_runtime.py`, `tests/test_ms.py`) |
+|---|---|---|
+| 1-3 | MS 는 provider 가 아니다 · provider 는 추론만 · MS 는 그 위의 정책 층 | `AdapterIsolation` — 위 계층은 등록부(`make_provider`)만 import, SDK import 없음 |
+| 4 | LLM 은 State Graph 전체에 접근하지 않는다 | `LLMSeesOnlyQueries.test_request_holds_no_graph_objects` — 요청 안에 그래프 · 노드 객체가 없고 기본 타입뿐 |
+| 5 | Query · Context Policy 가 허락한 최소 맥락만 | `test_only_query_authorized_entities` (양성 대조 포함, 세션 이름 · 예산 · 상태 이름도 안 보임) · `test_dropped_rows_not_sent` |
+| 6 | LLM 의 출력은 Proposal | `ProposalBoundary.test_native_tool_call_is_only_a_proposal` — 함수 호출 응답도 도구를 안 부른다 |
+| 7 | 실행 여부는 WALP 가 | `test_deny_means_no_tool_whatever_the_llm_says` · `test_single_call_site` · `PromptCannotOverrideWalp` |
+| 8 | 모든 provider 를 같은 텔레메트리 꼴로 | `Normalization.test_same_work_same_canonical_usage` — 같은 일을 세 provider 가 제 말투로 보고해도 canonical 이 같다 |
+| 9 | 원 텔레메트리 ≠ 의미 있는 State | `test_raw_counts_are_not_state` — 토큰 수는 그래프 · 질의에 없고 파생 상태만 있다 |
+| 10 | provider 모양이 State · Policy 모형에 안 스민다 | `test_provider_field_names_stay_in_adapters` · `ProviderCannotChangeSemantics` |
+| — | 정책 결정은 기록된 State + 판본으로 재현된다 | `Reproducible` — `replay()` 가 맞고, 기록을 고치면(상태 · 판본) 잡는다 |
 
-- **KEEP** — 행 그대로. 질의의 `must` 에 맞는 행 · 직전에 retrieve 로 청한 행은 예산을 넘어도 싣고 `over_budget` 을 세운다(조용히 안 자른다)
-- **SUMMARIZE** — 못 실은 행이 `summarize_min` 개 이상이면 개수 · 최소/최대/평균 · 값 분포(LLM 안 부름). 요약 자리를 먼저 떼어 두고 KEEP 을 채운다
-- **RETRIEVE** — 못 실은 행은 늘 손잡이(`h1` …)로 남는다. LLM 이 `retrieve` 를 제안하면 중재자를 지나 다음 판에 KEEP 으로 온다
+**시험이 헛돌지 않는지** 코드를 일부러 망가뜨려 봤다(2026-10-01). 새 불변식 12 가지 — Claude 캐시를 입력에 안 더함 · Gemini 사고 토큰 뺌 ·
+Gemini 추론 옵션 흉내 · 비스트리밍 TTFT 지어냄 · 확장을 신호로 · 원 측정을 그래프에 · 품질 우선 끔 · 도구 좁히기 안 함 · 중재 전에 도구 ·
+요청에 그래프 통째 · 정책이 기록과 다른 상태를 봄 · must 질의도 미룸 — 모두 빨개진다. 무해 대조 하나는 초록으로 남는다.
+처음 만든 MS 의 불변식 11 가지도 그대로다.
 
-질의의 모든 행은 셋 중 정확히 하나로 간다 — 시험이 예산 200 ~ 100000 에서 붙든다.
+## Provider — 같다고 가정하지 않는다
 
-## WALP ARBITER
+canonical `input_tokens` 는 OpenTelemetry GenAI 규약대로 **캐시 읽기를 포함한** 전체 입력, `output_tokens` 는 **추론 · 사고를 포함한** 청구 기준이다.
+그래서 어댑터마다 하는 일이 다르다:
 
-LLM 이 **본 것**(최소 맥락)과 **지금 상태**(그래프)를 같이 본다. 위에서부터 처음 걸리는 것이 DENY 의 까닭:
+| | OpenAI Responses | Claude Messages | Gemini generateContent | claude-cli |
+|---|---|---|---|---|
+| 입력 | 그대로(캐시 포함) | `input + cache_read + cache_creation` (Claude 는 캐시를 뺀 몫을 보고) | `prompt + toolUsePrompt` | Claude 와 같음 |
+| 출력 | 그대로(reasoning 포함) | 그대로(사고 포함) | `candidates + thoughts` (Gemini 는 사고를 뺀 몫을 보고) | Claude 와 같음 |
+| JSON 스키마 | native (`text.format`, strict) | native (`output_config.format`) | MIME 만, 스키마는 프롬프트로(필드 이름 미확인) → `unsupported` | 프롬프트로 → `unsupported` |
+| 추론 조절 | `reasoning.effort` — 모형에 달림 | `output_config.effort`. Haiku 4.5 는 거절, `off` 는 어디서도 안 함 | Gemini 3 의 `thinkingLevel` low/high 만 | `--effort` |
+| TTFT | 스트리밍에서만 | 스트리밍에서만 | 스트리밍에서만 | 없음 |
+| 비용 | 가격표(사용자가 줌) | 가격표 | 가격표 | **보고함** (`total_cost_usd`) |
+| 여기서 돌렸나 | **못 돌렸다** — 키 없음, 프록시가 막음 | 키 없음 — 녹음 응답으로만 | 키 없음 — 녹음 응답으로만 | **돌렸다** |
 
-| 규칙 | DENY 하는 때 |
+provider 고유 값(Claude 의 `cache_creation_input_tokens`, OpenAI 의 `reasoning_tokens`, Gemini 의 `thoughtsTokenCount` …)은 `extensions.<provider>`
+에 담긴다. **신호로 펴지 않는다** — 그래서 State 의 뜻을 바꿀 수 없다.
+
+## 정규 텔레메트리 (`run_telemetry.RunRecord`)
+
+```
+run          run_id · session_id · provider · model · timestamp · simulated
+tokens       input_tokens · output_tokens · cached_input_tokens · context_tokens* · retrieved_tokens* · total_tokens
+latency      ttft_ms (스트리밍일 때만) · inference_ms · total_ms
+interaction  llm_calls · tool_calls · retries · context_retrievals · walp_denies · proposal_invalid · non_progress_rounds
+outcome      task_success (그래프로 판정, 기준이 없으면 None) · user_correction (피드백으로) · tool_success
+policy       state · context_policy · prompt_policy · provider_policy · walp_decision · inputs   ← 재현용
+cost         usd · source (provider | price_table | None)
+estimated    * 추정한 칸과 방법        unsupported  못 해서 안 보낸 옵션        extensions  provider 고유 값
+```
+
+`otel()` 이 OpenTelemetry GenAI 이름(`gen_ai.usage.input_tokens` 등)으로도 낸다.
+
+## State — 사용의 모형 (`usage_model.py`)
+
+세션 하나의 원 측정은 전부 `evidence` 이고, 그래프에는 여덟 상태만 산다. **문턱은 잰 것이 아니라 손으로 둔 것이다** (`MODEL_VERSION`).
+
+| 상태 | 모형의 해석 |
 |---|---|
-| A0 | 제안을 못 읽었다(JSON 아님 · 모양 틀림) |
-| A1 | 이 맥락에서 제안되지 않은 도구 |
-| A2 | 대상을 KEEP 으로 본 적이 없다 — 요약 · 손잡이로만 봤으면 "retrieve h1 먼저" |
-| A3 | 그 도구의 대상 목록에 없다 |
-| A4 | 인자가 도구의 params 와 안 맞는다 |
-| A5 | 맥락을 지은 뒤 대상의 상태가 바뀌었다(본 판 ≠ 지금 판) |
-| A6 | 사전조건이 보는 속성이 없거나 ttl 을 넘겼다 · 사전조건이 지금 거짓 |
-| A7 | `external` · `irreversible` 인데 허가(`--grant`)가 없다 — 기본 DENY |
-| A8 | 같은 대상 · 같은 판에서 이미 ALLOW 한 같은 제안 |
-| E | 중재자 안의 예외 — **DENY**(닫힌 쪽으로) |
+| `token_budget_pressure` | 마지막 실행 input_tokens ≥ 0.9 × token_budget → HIGH, ≥ 0.6× → MEDIUM |
+| `context_pressure` | 마지막 실행 context_tokens ≥ 0.9 · 0.6 × context_budget |
+| `latency_pressure` | 최근 5 실행 total_ms 평균 ≥ 1.0 · 0.7 × latency_budget_ms |
+| `task_complexity` | 질의 행 ≥ 40 · 10, 또는 최근 5 실행 LLM 호출 ≥ 3 · 2 |
+| `answer_reliability` | 최근 5 실행: 못 읽은 제안 ≥ 0.2 이거나 DENY ≥ 호출의 절반 → LOW / ≤ 0.05 이고 ≤ 0.1 → HIGH |
+| `correction_rate` | 최근 10 피드백의 사용자 고침 비율 ≥ 0.2 · 0.05 |
+| `retry_pressure` | 최근 5 실행 재시도 평균 ≥ 1 · 0.3 |
+| `tool_churn` | 최근 5 실행 진전 없는 판(DENY · RETRIEVE) 평균 ≥ 2 · 1 |
 
-DENY 의 까닭은 다음 판 맥락의 `denied` 로 LLM 에 돌아간다. `tool: "none"` 은 NOOP. 판정은 `--ledger` 로 JSONL 에 남는다.
-walp 실행 정책층 설계 §5 의 안전 불변식 1~3 을 이 자리에 옮긴 것이다. 다만 walp 훅은 터지면 **안 막는 쪽**(사람의 말을 잃지 않게)이고,
-여기는 터지면 **막는 쪽**이다 — 지키는 것이 다르다(검사 안 된 도구 실행을 안 한다).
+입력이 없으면 상태는 **모름**이고, 정책은 모름을 "고정 정책대로" 로 읽는다.
+
+## Policy
+
+**품질 · 안전이 먼저다.** `answer_reliability=LOW` 나 `correction_rate=HIGH` 면 적응 맥락은 **아무것도 줄이지 않고**, 적응 프롬프트는
+예시 2 · JSON 스키마 · 칸 설명을 붙여 오히려 더 쓴다. 토큰을 아끼려고 품질을 깎는 계획은 나오지 않는다.
+
+- **Context** (`ctx-adaptive-1`): 압력 HIGH → 예산 ×0.5 · COMPRESS · DROP · 우선순위 ≥ 2 질의 DEFER / MEDIUM → ×0.75 · COMPRESS /
+  task_complexity HIGH 면 DROP · DEFER 를 끄고 ×0.75 밑으로 안 내린다. must 행은 어떤 동작에도 빠지지 않는다.
+- **Prompt** (`prompt-adaptive-1`): 압력 HIGH → 지시 concise / latency HIGH → reasoning low · 출력 512 / complexity HIGH → reasoning high /
+  correction HIGH → 도구를 `no_irreversible` 로 **좁힌다**.
+- **Provider** (`provider-explicit-1`): 요청이 이름 댄 것. `ProviderPolicy.select(state, request)` 인터페이스만 있고, 상태로 고르는 정책은
+  같은 과업을 provider 둘에 돌린 평가가 쌓인 뒤의 일이다.
+
+## WALP
+
+LLM 이 **본 것**(최소 맥락)과 **지금 상태**(그래프)를 같이 본다: A0 못 읽음 · A1 제안 안 된 도구 · A2 본 적 없는 대상(요약 · 미룸이면
+"retrieve 먼저", DROP 이면 "정책이 뺐다") · A3 그 도구의 대상 아님 · A4 인자 · A5 맥락 뒤 상태 바뀜 · A6 사전조건 낡음/거짓 ·
+A7 external · irreversible 허가 없음 · A8 같은 판 되풀이 · E 예외면 DENY. DENY 의 까닭은 다음 판 맥락으로 LLM 에 돌아간다.
+
+## 평가 (`ms/eval.py`)
+
+| 칸 | provider | Context | Prompt |
+|---|---|---|---|
+| A · B | OpenAI · Claude | fixed | fixed |
+| C · D | OpenAI · Claude | adaptive | fixed |
+| E · F | OpenAI · Claude | adaptive | adaptive |
+
+같은 과업(`eval/tasks/datacenter.json`, 7 개) · 같은 성공 기준(최종 **상태 그래프**에 대한 술어 + 금지 도구 미실행) · 같은 WALP 허가.
+과업마다 세계를 새로 짓고, 세션 상태는 이어 간다. 실패하면 모의 사용자가 한 번 고친다(user_correction). 짝(A↔C · B↔D · C↔E · D↔F)마다
+과업 단위 부트스트랩 95% 구간 · 품질 비열등(δ=0.05) · 안전을 먼저 본다. **provider 사이는 비교하지 않는다.**
+잰 것: 성공 · 고침 · 재시도 · 입력/출력/총 토큰 · 지연 · 비용 · 도구 호출 · 꺼냄 · WALP DENY 율 · 회복률.
+
+```bash
+python3 -m ms eval --tasks eval/tasks/datacenter.json \
+    --openai openai:<모형> --claude claude:claude-opus-5-5 --reps 3 --out eval/results/<이름>    # 키: OPENAI_API_KEY · ANTHROPIC_API_KEY
+```
+
+### 잰 것 — 아직 가설의 답이 아니다
+
+| 무엇 | 결과 | 읽는 법 |
+|---|---|---|
+| 모의 provider(`sim-*`) A~F | 배선이 끝까지 돈다 | **증거 아님.** 토큰 · 지연을 지어냈다. 모의 에이전트가 7 중 5 를 틀려 correction_rate=HIGH → 적응 정책이 품질 우선으로 **줄이지 않았다**(규칙대로) |
+| `claude-cli` B · D · F, 반복 1 (2026-10-01, 약 $0.29, 3 분) — [`eval/results/claude-cli_배선_2026-10-01.md`](eval/results/claude-cli_배선_2026-10-01.md) | 성공 6/7 셋 다 같음 · 금지 실행 0 · B→D 의 모든 차는 구간이 0 을 걸침(**모른다**) · D→F 는 입력 −227(구간 −295~−136) 인데 출력 +171 · 지연 +1.5 s · 비용 +$0.0008 | **사전등록 밖이다**(CLI 하네스가 붙는다, 반복 1). 방향은 선행조사(arXiv:2609.32961)가 말한 "토큰이 줄어도 느려질 수 있다" 와 같다. **사소한 설명을 못 죽였다**: 적응 프롬프트의 concise 지시가 원래 지시의 "rationale 한 줄" 을 빠뜨렸다 — 출력이 길어진 까닭이 이것일 수 있다(고치지 않고 남겼다: 결과와 코드가 맞게) |
+| 과업 t6 | 세 칸 모두 실패 | 다 식힌 세계에서 Claude 가 팬 고장 srv05 에 티켓을 열었다. 과업은 "아무것도 하지 마라" 를 기대했다 — **과업 정의의 결함**이지 정책의 효과가 아니다 |
+| 비용 대조 | 일치 | 한 실행: 입력 2,140(거의 다 1 시간 캐시 쓰기, $4/MTok) + 출력 94($10/MTok) = $0.0095 ≈ CLI 보고 $0.009496 |
 
 ## 돌리기
 
 ```bash
-python3 -m ms demo                      # 예시 세계(서버 12 · 랙 2) + 대본 LLM -- A2 · A7 에 막히고 셋째 판에 ALLOW
-python3 -m ms demo --llm "claude -p"    # 같은 세계, 진짜 모형 (gemini -p 도 된다)
-python3 -m ms ingest  ms/examples/datacenter.json --telemetry ms/examples/datacenter_telemetry.jsonl
-python3 -m ms context ms/examples/datacenter.json --telemetry ms/examples/datacenter_telemetry.jsonl --task "과열 서버"
-python3 -m ms run     SPEC.json --telemetry T.jsonl --task "..." --llm "claude -p" --grant reboot --ledger arb.jsonl
-python3 -m unittest tests.test_ms       # 46 개
+python3 -m ms demo                                   # 처음의 데이터센터 예시(대본 LLM)
+python3 -m ms ask ms/examples/datacenter.json --telemetry ms/examples/datacenter_telemetry.jsonl \
+    --task "과열된 서버를 처리하라" --provider claude-cli --context adaptive --prompt adaptive   # 진짜 Claude(로그인으로)
+python3 -m ms ask ... --provider claude --model claude-opus-5-5 --stream     # ANTHROPIC_API_KEY
+python3 -m ms ask ... --provider openai --model <모형>                        # OPENAI_API_KEY (모형 기본값을 지어내지 않는다)
+python3 -m ms ask ... --provider sim-gemini                                   # 모의 -- 배선 확인
+python3 -m unittest tests.test_ms tests.test_runtime                          # 85 개
 ```
-
-SPEC 꼴은 [`ms/examples/datacenter.json`](ms/examples/datacenter.json) — `models · relationships · entities · edges · tools · queries · policy · grants · now`.
-코드에서는:
 
 ```python
-from ms import StateManager, ToolRegistry, Pipeline, ContextPolicy, WalpArbiter, CommandLLM
+from ms import StateManager, ToolRegistry
+from ms.providers import make_provider
+from ms.runtime import Runtime
+from ms.policy import AdaptiveContext, AdaptivePrompt
 
-m = StateManager.from_spec(spec)
-m.ingest({"source": "bmc", "entity": "srv07", "signal": "cpu_temp_f", "value": 197.6, "ts": 992})
-reg = ToolRegistry(spec["tools"]); reg.bind("throttle", lambda target, args: [{"signal": "throttle_ack", "value": True}])
-res = Pipeline(m, reg, CommandLLM(["claude", "-p"]), ContextPolicy(1500), WalpArbiter(reg, grants={"reboot"})) \
-        .run("과열된 서버를 처리하라", spec["queries"])
+rt = Runtime(world, registry, {"claude": make_provider("claude", "claude-opus-5-5"),
+                               "openai": make_provider("openai", "<모형>")},
+             context_selector=AdaptiveContext(), prompt_selector=AdaptivePrompt(), grants={"open_ticket"})
+rt.open_session("s1", {"token_budget": 20000, "context_budget": 4000, "latency_budget_ms": 8000})
+out = rt.handle({"session": "s1", "task": "...", "queries": [...], "provider": "claude"})
+rt.feedback(out["run_id"], user_correction=False)     # 사람의 고침도 텔레메트리다
 ```
-
-## 확인한 것
-
-- 시험 46 개 통과. **시험이 헛돌지 않는지** 코드를 일부러 망가뜨려 봤다 — A2 · A5 · A7 제거, 중재자 예외를 ALLOW 로,
-  `select` 무시, 결과 밖 관계 누설, 모르는 신호를 상태로, 늦은 관측 덮어쓰기, 모름을 default 로, 줄인 행 조용히 버리기,
-  안 본 개체에 도구 제안 — 11 가지 모두 빨개진다. (마지막 것은 처음엔 **살아남았다** — 그 시험에서는 도구를 쓸 수 있는 개체가
-  마침 전부 보이고 있었다. 안 보이는 대상이 있는지부터 확인하도록 고쳤다.)
-- 배선: `--llm "claude -p"` 로 예시를 한 번 돌렸다(2026-10-01). 모형이 `throttle srv07 level 3` 을 냈고 ALLOW, 결과가 텔레메트리로 들어가
-  `throttled=True` 가 됐다. **한 번이다 — 잰 것이 아니다.**
 
 ## 알고 쓸 것
 
-- **잰 것이 없다.** 토큰을 얼마나 아끼는지, 막아야 할 제안을 얼마나 막는지, 맥락을 줄여서 LLM 의 판단이 나빠지는지 모른다.
-  예시의 "16 행 → KEEP 6 · 요약 6 · 손잡이 2" 는 장난감 세계 하나의 산수다.
-- 예산은 **글자 수**다(토큰이 아니다). 한글 · JSON 은 글자당 토큰이 다르다.
-- SUMMARIZE 는 개수 · 최소/최대/평균 · 값 분포뿐이다. 요약에 안 보이는 이상치(예: 6 개 중 1 개의 온도가 빠짐)는 `n` 으로만 드러난다.
-- 중재자가 보는 것은 **근거 · 신선도 · 사전조건 · 허가**다. 제안이 **옳은지**(그 서버를 낮추는 것이 맞는 처방인지)는 안 본다.
-  사전조건을 모형에 잘 적는 것이 그 몫이다.
-- 한 판에 제안 하나. 스레드 안전하지 않다. 그래프는 메모리에만 있다(저장 · 복원 없음).
-- [Sensor](https://github.com/cogito5170/Sensor) 의 판독 · [walp](https://github.com/cogito5170/walp) 의 실행 정책과는 **아직 안 이었다.**
-  llmsensor 의 판독(OK · SUSPECT · FAULT · UNKNOWN)은 그대로 텔레메트리로 넣을 수 있는 꼴이다.
+- **가설에 아직 답이 없다.** 사전등록대로 A~F 를 진짜 API 둘로, 반복 3 으로 돌려야 한다. 이 컨테이너에서는 OpenAI 를 못 부른다.
+- `context_tokens` · `retrieved_tokens` 는 **추정**이다(입력 토큰 × 글자 비율). claude-cli 처럼 provider 가 우리 프롬프트 밖의 토큰
+  (하네스 ~1,100)을 더하면 맥락 몫을 **부풀린다.** 그 상태(context_pressure)는 그만큼 과하게 HIGH 가 된다.
+- 상태의 문턱 · 정책의 규칙은 손으로 둔 것이다. 바꾸면 판본을 올린다 — 재현이 판본을 본다.
+- Gemini 의 JSON 스키마 강제 필드는 확인하지 못해 쓰지 않는다. Gemini 2.5 의 `thinkingBudget` 은 수준을 토큰 수로 바꿔야 해서 쓰지 않는다.
+- OpenAI 의 `reasoning.effort` 는 추론 모형에서만 받는다 — 어댑터는 모형 목록을 추측하지 않고 그대로 보낸다(거절되면 그 실행이 오류).
+- 한 판에 제안 하나. 그래프 · evidence 는 메모리에만. 스레드 안전하지 않다.
+- 선행조사: [`paper/선행조사/MS.md`](paper/선행조사/MS.md) (모형 · 그래프 · 중재자) · [`paper/선행조사/정책런타임.md`](paper/선행조사/정책런타임.md)
+  (가장 가까운 것: *Beyond Token Savings*, arXiv:2609.32961 — 같은 물음. **전문을 안 읽었다**).

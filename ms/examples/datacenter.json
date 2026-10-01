@@ -41,6 +41,9 @@
     "throttled": {
      "type": "bool",
      "ttl": 600
+    },
+    "ticket": {
+     "type": "string"
     }
    },
    "bindings": [
@@ -73,6 +76,10 @@
     {
      "signal": "throttle_ack",
      "property": "throttled"
+    },
+    {
+     "signal": "ticket",
+     "property": "ticket"
     }
    ],
    "derived": {

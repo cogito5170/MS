@@ -7,6 +7,13 @@
     bindings     어느 신호가 어느 속성을 추정하나 + 변환(scale · offset · round · map)
     derived      속성에서 결정론적으로 나오는 상태(예: temp_c >= 90 -> critical). 입력이 하나라도 없으면 None(모름)
 
+속성의 `role`:
+
+    state      (기본) 해석된 값이 상태 그래프에 산다 -- temp_c 처럼 그 자체로 뜻이 있는 것
+    evidence   상태 그래프에 **안 들어간다.** 파생 상태의 입력으로만 쓰인다. `window` 개를 모아 `agg`(last · mean · sum · max)
+               로 줄인다. 토큰 수 · 지연 같은 원 측정은 이것이다 -- `input_tokens=18000` 은 상태가 아니고,
+               모형이 `input_tokens >= 0.9 × token_budget` 으로 해석한 `token_budget_pressure=HIGH` 가 상태다
+
 정의는 JSON 으로 적을 수 있다:
 
     {"name": "Server",
@@ -21,6 +28,23 @@ from dataclasses import dataclass, field
 from . import predicate
 
 TYPES = ("number", "integer", "string", "bool", "enum")
+AGGS = ("last", "mean", "sum", "max")
+
+
+def aggregate(agg: str, values: list):
+    """evidence 표본들을 하나로. 참거짓은 0/1 로 센다(mean 이 비율이 된다)."""
+    xs = [int(v) if isinstance(v, bool) else v for v in values]
+    if not xs:
+        return None
+    if agg == "last":
+        return values[-1]
+    if not all(isinstance(x, (int, float)) for x in xs):
+        return None
+    if agg == "mean":
+        return sum(xs) / len(xs)
+    if agg == "sum":
+        return sum(xs)
+    return max(xs)
 
 
 class ModelError(ValueError):
@@ -36,6 +60,9 @@ class PropertySpec:
     max: "float | None" = None
     values: "list | None" = None      # enum
     ttl: "float | None" = None        # None 이면 낡지 않는다(구조적 사실 -- 역할 · 위치 같은 것)
+    role: str = "state"               # state · evidence
+    window: int = 1                   # evidence: 최근 몇 개를 모으나
+    agg: str = "last"                 # evidence: last · mean · sum · max (참거짓은 0/1 로)
 
     def validate(self, v):
         """(값, 문제). 문제가 있으면 그 값은 상태가 되지 못한다."""
@@ -137,6 +164,12 @@ class Model:
                 raise ModelError(f"{name}.{pname}: 모르는 타입 {spec.type!r}")
             if spec.type == "enum" and not spec.values:
                 raise ModelError(f"{name}.{pname}: enum 인데 values 가 없다")
+            if spec.role not in ("state", "evidence"):
+                raise ModelError(f"{name}.{pname}: 모르는 role {spec.role!r}")
+            if spec.agg not in AGGS or int(spec.window) < 1:
+                raise ModelError(f"{name}.{pname}: agg 는 {AGGS} 중 하나, window >= 1")
+            if spec.role == "state" and (spec.agg != "last" or spec.window != 1):
+                raise ModelError(f"{name}.{pname}: window · agg 는 evidence 에만")
             props[pname] = spec
         binds = {}
         for b in d.get("bindings") or []:
