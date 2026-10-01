@@ -39,7 +39,8 @@ CONFIGS = {"A": ("openai", "fixed", "fixed"), "B": ("claude", "fixed", "fixed"),
            "E": ("openai", "adaptive", "adaptive"), "F": ("claude", "adaptive", "adaptive")}
 PAIRS = [("A", "C", "적응 맥락(openai)"), ("B", "D", "적응 맥락(claude)"),
          ("C", "E", "적응 프롬프트 더함(openai)"), ("D", "F", "적응 프롬프트 더함(claude)")]
-METRICS = ("input_tokens", "output_tokens", "total_tokens", "total_ms", "retries", "cost_usd", "rationale_chars")
+METRICS = ("input_tokens", "uncached_input_tokens", "output_tokens", "total_tokens", "total_ms", "retries", "cost_usd",
+           "rationale_chars")
 DELTA = 0.05          # 품질 비열등 한계(사전등록)
 
 
@@ -56,48 +57,75 @@ def _world(tasks_file: dict, task: dict):
     return spec, m, reg
 
 
-def run_config(letter: str, slots: dict, tasks_file: dict, reps: int, provider_kw=None, log=print) -> list:
-    slot, cmode, pmode = CONFIGS[letter]
-    pname, model = parse_slot(slots[slot])
-    provider = make_provider(pname, model, **(provider_kw or {}).get(pname, {}))
-    rows = []
+class Lane:
+    """한 칸 · 한 반복 = 한 세션. 세션의 사용 상태가 과업을 건너 이어진다."""
+
+    def __init__(self, letter, rep, slots, tasks_file, provider_kw=None):
+        slot, self.cmode, self.pmode = CONFIGS[letter]
+        self.pname, model = parse_slot(slots[slot])
+        self.provider = make_provider(self.pname, model, **(provider_kw or {}).get(self.pname, {}))
+        self.letter, self.rep, self.tf = letter, rep, tasks_file
+        self.usage = StateManager(clock=time.time)
+        install(self.usage)
+        self.sess, self.opened = f"{letter}-r{rep}", False
+
+    def run_task(self, task, log=print) -> dict:
+        tf, row = self.tf, None
+        for attempt in (0, 1):
+            spec, world, reg = _world(tf, task)
+            rt = Runtime(world, reg, {self.pname: self.provider}, grants=tf.get("grants", ()),
+                         context_selector=AdaptiveContext() if self.cmode == "adaptive" else FixedContext(),
+                         prompt_selector=AdaptivePrompt() if self.pmode == "adaptive" else FixedPrompt(),
+                         base_context=tf.get("base_context"), max_rounds=tf.get("max_rounds", 4),
+                         usage_manager=self.usage, prices=tf.get("prices"))
+            if not self.opened:
+                rt.open_session(self.sess, tf["budgets"])
+                self.opened = True
+            text = task["task"] if attempt == 0 else f"{task['task']}\n사용자 고침: {task['correction']}"
+            req = {"session": self.sess, "task": text, "queries": task.get("queries") or spec["queries"],
+                   **{k: task[k] for k in ("success", "forbidden", "expect_noop") if k in task}}
+            out = rt.handle(req)
+            rec = out["record"]
+            ok = rec["outcome"]["task_success"]
+            if attempt == 0:
+                row = _row(self.letter, self.rep, task, rec, out["result"])
+                log(f"  {self.letter} r{self.rep} {task['id']:<18} {'성공' if ok else '실패'} "
+                    f"in={rec['tokens']['input_tokens']} 캐시={rec['tokens']['cached_input_tokens']} "
+                    f"ms={rec['latency']['total_ms']:.0f} walp={rec['policy']['walp_decision']['all']}")
+                if ok or not task.get("correction"):
+                    rt.feedback(rec["run"]["run_id"], False)
+                    break
+                rt.feedback(rec["run"]["run_id"], True)
+                row["user_correction"] = True
+            else:
+                row["success_after_correction"] = bool(ok)
+                log(f"  {self.letter} r{self.rep} {task['id']:<18} 고친 뒤 {'성공' if ok else '실패'}")
+        return row
+
+
+def run_all(configs, slots, tasks_file, reps, provider_kw=None, order="interleaved", seed=0, log=print) -> dict:
+    """order=interleaved: 반복마다 · 과업마다 칸 순서를 씨앗 고정 난수로 섞는다. 앞 칸이 쓴 provider 캐시를 늘 같은 칸이
+    읽는 치우침을 줄인다(재측정에서 실제로 났다). 그래도 **같은 지시문을 쓰는 칸끼리는 캐시를 나눠 쓴다** -- 그래서
+    캐시 안 된 입력(`uncached_input_tokens`)도 따로 비교한다. order=blocked: 칸마다 통째로(예전 방식)."""
+    rng = random.Random(seed)
+    rows_by = {c: [] for c in configs}
+    if order == "blocked":
+        for c in configs:
+            for rep in range(reps):
+                lane = Lane(c, rep, slots, tasks_file, provider_kw)
+                for task in tasks_file["tasks"]:
+                    rows_by[c].append(lane.run_task(task, log))
+        return rows_by
     for rep in range(reps):
-        usage = StateManager(clock=time.time)
-        install(usage)
-        sess = f"{letter}-r{rep}"
-        first = True
-        for task in tasks_file["tasks"]:
-            for attempt in (0, 1):
-                spec, world, reg = _world(tasks_file, task)
-                rt = Runtime(world, reg, {pname: provider}, grants=tasks_file.get("grants", ()),
-                             context_selector=AdaptiveContext() if cmode == "adaptive" else FixedContext(),
-                             prompt_selector=AdaptivePrompt() if pmode == "adaptive" else FixedPrompt(),
-                             base_context=tasks_file.get("base_context"), max_rounds=tasks_file.get("max_rounds", 4),
-                             usage_manager=usage, prices=tasks_file.get("prices"))
-                if first:
-                    rt.open_session(sess, tasks_file["budgets"])
-                    first = False
-                text = task["task"] if attempt == 0 else f"{task['task']}\n사용자 고침: {task['correction']}"
-                req = {"session": sess, "task": text, "queries": task.get("queries") or spec["queries"],
-                       **{k: task[k] for k in ("success", "forbidden", "expect_noop") if k in task}}
-                out = rt.handle(req)
-                rec = out["record"]
-                ok = rec["outcome"]["task_success"]
-                if attempt == 0:
-                    row = _row(letter, rep, task, rec, out["result"])
-                    rows.append(row)
-                    log(f"  {letter} r{rep} {task['id']:<18} {'성공' if ok else '실패'} "
-                        f"in={rec['tokens']['input_tokens']} ms={rec['latency']['total_ms']:.0f} "
-                        f"walp={rec['policy']['walp_decision']['all']}")
-                    if ok or not task.get("correction"):
-                        rt.feedback(rec["run"]["run_id"], False)
-                        break
-                    rt.feedback(rec["run"]["run_id"], True)
-                    row["user_correction"] = True
-                else:
-                    row["success_after_correction"] = bool(ok)
-                    log(f"  {letter} r{rep} {task['id']:<18} 고친 뒤 {'성공' if ok else '실패'}")
-    return rows
+        lanes = {c: Lane(c, rep, slots, tasks_file, provider_kw) for c in configs}
+        for i, task in enumerate(tasks_file["tasks"]):
+            seq = list(configs)
+            rng.shuffle(seq)
+            for c in seq:
+                row = lanes[c].run_task(task, log)
+                row["order"] = [rep, i, seq.index(c)]
+                rows_by[c].append(row)
+    return rows_by
 
 
 def _row(letter, rep, task, rec, result) -> dict:
@@ -109,6 +137,9 @@ def _row(letter, rep, task, rec, result) -> dict:
             "forbidden_executed": any(e["tool"] in (task.get("forbidden") or []) for e in result["executed"]),
             "input_tokens": rec["tokens"]["input_tokens"], "output_tokens": rec["tokens"]["output_tokens"],
             "total_tokens": rec["tokens"]["total_tokens"], "cached_input_tokens": rec["tokens"]["cached_input_tokens"],
+            "uncached_input_tokens": None if rec["tokens"]["input_tokens"] is None else
+            rec["tokens"]["input_tokens"] - (rec["tokens"]["cached_input_tokens"] or 0),
+            "model_version": st.get("model_version"),
             "context_tokens": rec["tokens"]["context_tokens"], "total_ms": rec["latency"]["total_ms"],
             "inference_ms": rec["latency"]["inference_ms"], "ttft_ms": rec["latency"]["ttft_ms"],
             "retries": rec["interaction"]["retries"], "tool_calls": rec["interaction"]["tool_calls"],
@@ -139,6 +170,7 @@ def summarize(rows: list) -> dict:
             "retries": _mean([r["retries"] for r in rows]), "input_tokens": _mean([r["input_tokens"] for r in rows]),
             "output_tokens": _mean([r["output_tokens"] for r in rows]), "total_tokens": _mean([r["total_tokens"] for r in rows]),
             "cached_input_tokens": _mean([r["cached_input_tokens"] for r in rows]),
+            "uncached_input_tokens": _mean([r["uncached_input_tokens"] for r in rows]),
             "total_ms_median": statistics.median([r["total_ms"] for r in rows]) if rows else None,
             "cost_usd": None if any(r["cost_usd"] is None for r in rows) else sum(r["cost_usd"] for r in rows),
             "tool_calls": sum(r["tool_calls"] for r in rows), "retrievals": sum(r["retrievals"] for r in rows),
@@ -220,19 +252,21 @@ def report_md(rep: dict) -> str:
     L = []
     if rep["not_evidence"]:
         L += ["> **이 결과는 가설의 증거가 아니다.** " + rep["not_evidence"], ""]
-    L += [f"# 평가 -- {rep['tasks_file']} · 반복 {rep['reps']} · {rep['started']}", "",
+    L += [f"# 평가 -- {rep['tasks_file']} · 반복 {rep['reps']} · 순서 {rep.get('order', 'blocked')}"
+          f"(씨앗 {rep.get('seed')}) · {rep['started']}", "", f"판본: {rep.get('versions')}", "",
           "## provider 능력(같다고 가정하지 않는다)", "", "| 자리 | 무엇 | 능력 |", "|---|---|---|"]
     for slot, cap in rep["capabilities"].items():
         L.append(f"| {slot} | {rep['slots'][slot]} | " + " · ".join(f"{k}: {v}" for k, v in cap.items()
                                                               if k not in ("provider", "model")) + " |")
-    L += ["", "## 칸별", "", "| 칸 | 성공 | 고침 | 금지 실행 | 재시도 | 입력 | 출력 | 총 토큰 | 지연 중앙(ms) | 비용 | 도구 | 꺼냄 | DENY 율 | 회복 |",
-          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    L += ["", "## 칸별", "", "| 칸 | 성공 | 고침 | 금지 실행 | 재시도 | 입력 | 캐시 안 된 입력 | 출력 | 총 토큰 | 지연 중앙(ms) | 비용 | 도구 | 꺼냄 | DENY 율 | 회복 |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
 
     def f(v, k=1):
         return "-" if v is None else (f"{v:.{k}f}" if isinstance(v, float) else str(v))
     for c, s in rep["summary"].items():
         L.append(f"| {c} | {f(s['task_success'], 2)} | {s['user_corrections']} | {s['forbidden_executed']} | "
-                 f"{f(s['retries'], 2)} | {f(s['input_tokens'], 0)} | {f(s['output_tokens'], 0)} | {f(s['total_tokens'], 0)} | "
+                 f"{f(s['retries'], 2)} | {f(s['input_tokens'], 0)} | {f(s.get('uncached_input_tokens'), 0)} | "
+                 f"{f(s['output_tokens'], 0)} | {f(s['total_tokens'], 0)} | "
                  f"{f(s['total_ms_median'], 0)} | {f(s['cost_usd'], 4)} | {s['tool_calls']} | {s['retrievals']} | "
                  f"{f(s['walp_deny_rate'], 2)} | {f(s['walp_recovery_rate'], 2)} |")
     L += ["", "## 짝 비교(사전등록 판정)", ""]
@@ -250,17 +284,20 @@ def report_md(rep: dict) -> str:
 
 
 def evaluate(tasks_path: str, slots: dict, configs=("A", "B", "C", "D", "E", "F"), reps: int = 3,
-             provider_kw=None, log=print) -> dict:
+             provider_kw=None, order: str = "interleaved", seed: int = 0, log=print) -> dict:
     with open(tasks_path, encoding="utf-8") as fh:
         tf = json.load(fh)
-    rows_by, caps = {}, {}
+    use = []
     for c in configs:
+        if CONFIGS[c][0] not in slots:
+            log(f"[{c}] {CONFIGS[c][0]} 자리가 비었다 -- 건너뛴다")
+        else:
+            use.append(c)
+    log(f"칸 {', '.join(use)} · 반복 {reps} · 순서 {order}(씨앗 {seed})")
+    rows_by = run_all(use, slots, tf, reps, provider_kw, order, seed, log)
+    caps = {}
+    for c in use:
         slot = CONFIGS[c][0]
-        if slot not in slots:
-            log(f"[{c}] {slot} 자리가 비었다 -- 건너뛴다")
-            continue
-        log(f"[{c}] {slots[slot]} · context={CONFIGS[c][1]} · prompt={CONFIGS[c][2]}")
-        rows_by[c] = run_config(c, slots, tf, reps, provider_kw, log)
         pname, model = parse_slot(slots[slot])
         caps.setdefault(slot, make_provider(pname, model, **(provider_kw or {}).get(pname, {})).capabilities())
     sims = sorted({slots[CONFIGS[c][0]] for c in rows_by if any(r["simulated"] for r in rows_by[c])})
@@ -270,8 +307,10 @@ def evaluate(tasks_path: str, slots: dict, configs=("A", "B", "C", "D", "E", "F"
         note.append(f"모의 provider({', '.join(sims)}) -- 토큰 · 지연 · 응답을 지어냈다. 배선 확인일 뿐이다")
     if cli:
         note.append("claude-cli 는 Claude Code 하네스가 붙어 API 의 Claude 와 같지 않다(사전등록: B · D · F 가 아니라 따로)")
-    rep = {"tasks_file": tasks_path, "reps": reps, "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "slots": slots,
-           "capabilities": caps, "not_evidence": " / ".join(note),
-           "summary": {c: summarize(r) for c, r in rows_by.items()}, "comparisons": compare(rows_by),
-           "rows": [r for c in rows_by for r in rows_by[c]], "prereg": "eval/PREREG_적응정책.md"}
-    return rep
+    from .usage_model import MODEL_VERSION
+    from .prompt import TEMPLATE_VERSION
+    return {"tasks_file": tasks_path, "reps": reps, "order": order, "seed": seed, "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "slots": slots, "versions": {"usage_model": MODEL_VERSION, "prompt_text": TEMPLATE_VERSION},
+            "capabilities": caps, "not_evidence": " / ".join(note),
+            "summary": {c: summarize(r) for c, r in rows_by.items()}, "comparisons": compare(rows_by),
+            "rows": [r for c in rows_by for r in rows_by[c]], "prereg": "eval/PREREG_적응정책.md"}

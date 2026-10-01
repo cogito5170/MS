@@ -10,6 +10,8 @@
 속성의 `role`:
 
     state      (기본) 해석된 값이 상태 그래프에 산다 -- temp_c 처럼 그 자체로 뜻이 있는 것
+    evidence   (아래) -- 파생의 입력으로 `<속성>__n`(창 안 표본 수) · `<속성>__sum`(창 안 합, 참거짓은 참의 개수)도 쓸 수 있다.
+               "표본 3 개 이상 · 사건 2 번 이상일 때만 판정" 같은 것을 모형이 정한다
     evidence   상태 그래프에 **안 들어간다.** 파생 상태의 입력으로만 쓰인다. `window` 개를 모아 `agg`(last · mean · sum · max)
                로 줄인다. 토큰 수 · 지연 같은 원 측정은 이것이다 -- `input_tokens=18000` 은 상태가 아니고,
                모형이 `input_tokens >= 0.9 × token_budget` 으로 해석한 `token_budget_pressure=HIGH` 가 상태다
@@ -94,6 +96,12 @@ class PropertySpec:
             if self.max is not None and v > self.max:
                 return None, f"{self.name}: {v} > 최대 {self.max}{self.unit}"
         return v, None
+
+
+def _is_count(name: str, props: dict) -> bool:
+    """`x__n` · `x__sum` -- evidence 속성 x 의 창 안 표본 수 · 합."""
+    base = name[:-3] if name.endswith("__n") else (name[:-5] if name.endswith("__sum") else None)
+    return bool(base) and base in props and props[base].role == "evidence"
 
 
 def _apply_transform(steps, v):
@@ -189,7 +197,7 @@ class Model:
                     bad = predicate.check(p)
                     if bad:
                         raise ModelError(f"{name}.{dname}: {bad[0]}")
-                    if p[0] not in props:
+                    if p[0] not in props and not _is_count(p[0], props):
                         raise ModelError(f"{name}.{dname}: 없는 속성 {p[0]} 를 본다")
             der[dname] = dv
         return cls(name, props, binds, der, d.get("description", ""))
@@ -198,7 +206,8 @@ class Model:
         if prop in self.properties:
             return self.properties[prop].ttl
         if prop in self.derived:   # 파생의 ttl = 입력 중 가장 짧은 것
-            ttls = [self.properties[p].ttl for p in self.derived[prop].inputs if self.properties[p].ttl is not None]
+            ins = [p.rsplit("__", 1)[0] if p not in self.properties else p for p in self.derived[prop].inputs]
+            ttls = [self.properties[p].ttl for p in ins if self.properties[p].ttl is not None]
             return min(ttls) if ttls else None
         return None
 

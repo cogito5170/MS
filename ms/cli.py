@@ -113,6 +113,9 @@ def main(argv=None):
     s.add_argument("--configs", default="A,B,C,D,E,F")
     s.add_argument("--reps", type=int, default=3)
     s.add_argument("--out", help="결과를 <out>.json · <out>.md 로")
+    s.add_argument("--order", choices=("interleaved", "blocked"), default="interleaved",
+                   help="interleaved: 과업마다 칸 순서를 섞는다(provider 캐시 치우침을 줄인다)")
+    s.add_argument("--seed", type=int, default=0)
     for name in ("demo", "ingest", "context", "run"):
         s = sub.add_parser(name)
         if name != "demo":
@@ -207,7 +210,8 @@ class _Res:
 def _eval(a):
     from .eval import evaluate, report_md
     slots = {k: v for k, v in (("openai", a.openai), ("claude", a.claude)) if v}
-    rep = evaluate(a.tasks, slots, tuple(c.strip() for c in a.configs.split(",") if c.strip()), a.reps)
+    rep = evaluate(a.tasks, slots, tuple(c.strip() for c in a.configs.split(",") if c.strip()), a.reps,
+                   order=a.order, seed=a.seed)
     md = report_md(rep)
     if a.out:
         with open(a.out + ".json", "w", encoding="utf-8") as f:

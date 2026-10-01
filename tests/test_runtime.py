@@ -521,6 +521,40 @@ class PromptText(unittest.TestCase):
         self.assertTrue(replay(rec["policy"])["ok"])
 
 
+class QualityStateNeedsTwoEvents(unittest.TestCase):
+    """usage-model-2: 품질 상태는 사건 하나로 뒤집히지 않는다(재측정에서 1/3 로 LOW 가 된 일)."""
+
+    def _reliability(self, seq):
+        m = StateManager(clock=Clock())
+        sid = U.open_session(m, "s", {})
+        out = []
+        for inv in seq:
+            for sig, v in (("interaction.proposal_invalid", inv), ("interaction.walp_denies", inv),
+                           ("interaction.llm_calls", 2)):
+                m.ingest({"source": "t", "entity": sid, "signal": sig, "value": v, "ts": 1.0})
+            out.append(U.snapshot(m, sid)["answer_reliability"])
+        return out
+
+    def test_one_failure_is_not_low(self):
+        self.assertEqual(self._reliability([0, 0, 1, 0, 0]), [None, None, "MEDIUM", "MEDIUM", "MEDIUM"])
+
+    def test_two_failures_are_low(self):                       # 대조 -- 막기만 하는 것이 아니다
+        self.assertEqual(self._reliability([0, 1, 0, 1]), [None, None, "MEDIUM", "LOW"])
+
+    def test_correction_needs_two(self):
+        for seq, want in (([True, False, False], "MEDIUM"), ([True, True, False], "HIGH")):
+            m = StateManager(clock=Clock())
+            sid = U.open_session(m, "s", {})
+            for c in seq:
+                m.ingest({"source": "u", "entity": sid, "signal": "outcome.user_correction", "value": c, "ts": 1.0})
+            self.assertEqual(U.snapshot(m, sid)["correction_rate"], want, seq)
+
+    def test_model_version_in_state(self):
+        self.assertEqual(U.MODEL_VERSION, "usage-model-2")
+        m = StateManager(clock=Clock())
+        self.assertEqual(U.snapshot(m, U.open_session(m, "s", {}))["model_version"], "usage-model-2")
+
+
 class ContextActions(unittest.TestCase):
     def _ctx(self, **kw):
         spec, m, reg, *_ = world(budget=100000)
@@ -571,6 +605,22 @@ class Harness(unittest.TestCase):
             "t1-hot", "t2-fan", "t3-normal-target", "t4-summarized", "t5-reboot-asked", "t6-all-normal", "t7-hottest")})
         for c in rep["comparisons"]:
             self.assertIn(c["quality"]["verdict"], ("비열등", "열등(실격)", "판정 불가", "판정 불가(구간이 넓다)"))
+
+    def test_interleaved_order(self):
+        from ms.eval import evaluate
+        path = os.path.join(ROOT, "eval", "tasks", "datacenter.json")
+        slots = {"openai": "sim-openai", "claude": "sim-claude"}
+        a = evaluate(path, slots, ("B", "D", "F"), reps=2, seed=7, log=lambda *x: None)
+        b = evaluate(path, slots, ("B", "D", "F"), reps=2, seed=7, log=lambda *x: None)
+        orders = lambda rep: [(r["config"], tuple(r["order"])) for r in rep["rows"]]
+        self.assertEqual(orders(a), orders(b))                                   # 씨앗이 같으면 같다
+        firsts = {r["config"] for r in a["rows"] if r["order"][2] == 0}
+        self.assertGreater(len(firsts), 1)                                       # 늘 같은 칸이 먼저가 아니다
+        for c in "BDF":
+            self.assertEqual(len([r for r in a["rows"] if r["config"] == c]), 14)
+        self.assertTrue(all(r["uncached_input_tokens"] is not None for r in a["rows"]))
+        self.assertIn("uncached_input_tokens", a["comparisons"][0]["metrics"])
+        self.assertEqual(a["versions"]["usage_model"], "usage-model-2")
 
     def test_cli_ask(self):
         p = subprocess.run([sys.executable, "-m", "ms", "ask", "ms/examples/datacenter.json", "--telemetry",

@@ -137,6 +137,8 @@ class StateManager:
         for k, win in self.evidence.get(nid, {}).items():
             base[k] = aggregate(model.properties[k].agg, [v.value for v in win])
             when[k] = win[-1].ts
+            base[f"{k}__n"], when[f"{k}__n"] = len(win), win[-1].ts
+            base[f"{k}__sum"], when[f"{k}__sum"] = aggregate("sum", [v.value for v in win]), win[-1].ts
         changes = {}
         for name, d in model.derived.items():
             new = d.compute(base)

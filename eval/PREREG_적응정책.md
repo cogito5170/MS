@@ -72,3 +72,14 @@
 - `simulated` provider 로 돈 결과(배선 확인)는 이 가설의 증거가 아니다. 보고서가 그것을 머리에 크게 적는다.
 - `claude-cli` provider(`claude -p`)는 Claude Code 하네스의 시스템 프롬프트가 붙는다 -- API 의 Claude 와 **같지 않다.**
   그 결과는 B · D · F 칸이 아니라 따로 적는다.
+
+## 고침 1 (2026-10-01, 진짜 API 수가 하나도 나오기 전)
+
+claude-cli 배선 측정 둘(사전등록 밖)에서 본 두 가지 때문에 설계를 고친다. 가설 · 칸 · 판정 규칙은 그대로다.
+
+1. **순서**: 칸을 통째로 차례로 돌지 않는다. 반복마다 · 과업마다 칸 순서를 씨앗 고정 난수로 섞는다(`--order interleaved --seed 0`).
+   재측정에서 앞 측정이 쓴 provider 캐시를 B · D 만 읽어 비용이 4 배 갈렸다.
+2. **캐시 안 된 입력**(`input_tokens − cached_input_tokens`)을 지표에 더한다. 같은 지시문을 쓰는 칸끼리는 섞어도 캐시를 나눠 쓰므로
+   H1(입력 토큰)은 **두 가지로 다 본다.** 둘이 갈리면 "캐시 때문에 갈린다" 고 적고 H1 을 판정하지 않는다. H4(비용)도 같다.
+3. **사용 모형 usage-model-2**: answer_reliability LOW · correction_rate HIGH 는 표본 3 개 이상 · 사건 2 번 이상일 때만.
+   (usage-model-1 은 창 안의 실패 한 번이 곧 LOW 였다.) 진짜 측정은 usage-model-2 로 한다.

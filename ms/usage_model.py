@@ -11,9 +11,11 @@ Session 의 속성은 전부 **evidence** 다 -- 그래프(→ 질의 → LLM)�
     context_pressure        마지막 실행의 context_tokens 가 context_budget 의 0.9 · 0.6 배
     latency_pressure        최근 5 실행 total_ms 평균이 latency_budget_ms 의 1.0 · 0.7 배
     task_complexity         질의에 걸린 행(matched_rows) 40 · 10 이상, 또는 최근 5 실행 LLM 호출 평균 3 · 2 이상
-    answer_reliability      최근 5 실행에서 못 읽은 제안 비율 >= 0.2 이거나 DENY 가 LLM 호출의 절반 이상 LOW ·
-                            못 읽은 제안 <= 0.05 이고 DENY 가 호출의 0.1 이하 HIGH · 아니면 MEDIUM
-    correction_rate         최근 10 피드백 중 사용자 고침 비율 0.2 · 0.05 이상
+    answer_reliability      (실행 3 개 이상일 때만) 최근 5 실행에서 못 읽은 제안 비율 >= 0.2 이거나 DENY 가 LLM 호출의 절반 이상 LOW ·
+                            못 읽은 제안 <= 0.05 이고 DENY 가 호출의 0.1 이하 HIGH · 아니면 MEDIUM.
+                            LOW 는 그 사건이 창 안에 **2 번 이상**일 때만 -- 한 번으로는 MEDIUM 까지
+    correction_rate         (피드백 3 개 이상일 때만) 최근 10 피드백 중 사용자 고침 비율 0.2 · 0.05 이상.
+                            HIGH 는 고침이 **2 번 이상**일 때만
     retry_pressure          최근 5 실행 재시도 평균 1 · 0.3 이상
     tool_churn              최근 5 실행에서 진전 없는 판(DENY · RETRIEVE 로 끝난 판) 평균 2 · 1 이상
 
@@ -23,7 +25,13 @@ Session 의 속성은 전부 **evidence** 다 -- 그래프(→ 질의 → LLM)�
 """
 from __future__ import annotations
 
-MODEL_VERSION = "usage-model-1"
+MODEL_VERSION = "usage-model-2"
+# usage-model-1 -> 2 (2026-10-01): 품질 상태(answer_reliability LOW · correction_rate HIGH)는 **사건 하나로 정하지 않는다.**
+#   재측정에서 세션 셋째 실행의 못 읽은 답 하나(1/3 = 0.33 >= 0.2)로 LOW 가 되어 품질 우선으로 뒤집혔다.
+#   창 5 · 문턱 0.2 면 창 안의 실패 **한 번**이 곧 LOW 다 -- 표본 수만 늘려서는 안 고쳐진다(1/3 도 0.33).
+#   그래서: 표본 >= MIN_SAMPLES 이고, 그 사건이 창 안에 MIN_EVENTS 번 이상이고, 비율이 문턱 이상일 때만.
+MIN_SAMPLES = 3
+MIN_EVENTS = 2
 STATES = ("token_budget_pressure", "context_pressure", "latency_pressure", "task_complexity",
           "answer_reliability", "correction_rate", "retry_pressure", "tool_churn")
 
@@ -95,14 +103,23 @@ SESSION = {
             {"when": [["llm_calls", ">=", 2], ["matched_rows", ">=", 0]], "value": "MEDIUM"},
             {"when": [["matched_rows", ">=", 0], ["llm_calls", ">=", 0]], "value": "LOW"}], "default": None},
         "answer_reliability": {"cases": [
-            {"when": [["proposal_invalid", ">=", 0.2], ["walp_denies", ">=", 0], ["llm_calls", ">", 0]], "value": "LOW"},
-            {"when": [["walp_denies", ">=", {"prop": "llm_calls", "mul": 0.5}], ["proposal_invalid", ">=", 0],
-                      ["llm_calls", ">", 0]], "value": "LOW"},
+            {"when": [["proposal_invalid", ">=", 0.2], ["proposal_invalid__sum", ">=", MIN_EVENTS],
+                      ["proposal_invalid__n", ">=", MIN_SAMPLES], ["walp_denies", ">=", 0], ["llm_calls", ">", 0]],
+             "value": "LOW"},
+            {"when": [["walp_denies", ">=", {"prop": "llm_calls", "mul": 0.5}], ["walp_denies__sum", ">=", MIN_EVENTS],
+                      ["proposal_invalid__n", ">=", MIN_SAMPLES], ["proposal_invalid", ">=", 0], ["llm_calls", ">", 0]],
+             "value": "LOW"},
             {"when": [["proposal_invalid", "<=", 0.05], ["walp_denies", "<=", {"prop": "llm_calls", "mul": 0.1}],
-                      ["llm_calls", ">", 0]], "value": "HIGH"},
-            {"when": [["proposal_invalid", ">=", 0], ["walp_denies", ">=", 0], ["llm_calls", ">", 0]],
-             "value": "MEDIUM"}], "default": None},
-        "correction_rate": _three("user_correction", None, 0.2, 0.05),
+                      ["proposal_invalid__n", ">=", MIN_SAMPLES], ["llm_calls", ">", 0]], "value": "HIGH"},
+            {"when": [["proposal_invalid", ">=", 0], ["walp_denies", ">=", 0],
+                      ["proposal_invalid__n", ">=", MIN_SAMPLES], ["llm_calls", ">", 0]], "value": "MEDIUM"}],
+            "default": None},
+        "correction_rate": {"cases": [
+            {"when": [["user_correction", ">=", 0.2], ["user_correction__sum", ">=", MIN_EVENTS],
+                      ["user_correction__n", ">=", MIN_SAMPLES]], "value": "HIGH"},
+            {"when": [["user_correction", ">=", 0.05], ["user_correction__n", ">=", MIN_SAMPLES]], "value": "MEDIUM"},
+            {"when": [["user_correction", ">=", 0], ["user_correction__n", ">=", MIN_SAMPLES]], "value": "LOW"}],
+            "default": None},
         "retry_pressure": _three("retries", None, 1.0, 0.3),
         "tool_churn": _three("non_progress_rounds", None, 2.0, 1.0),
     },
