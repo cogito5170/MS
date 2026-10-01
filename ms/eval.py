@@ -39,7 +39,7 @@ CONFIGS = {"A": ("openai", "fixed", "fixed"), "B": ("claude", "fixed", "fixed"),
            "E": ("openai", "adaptive", "adaptive"), "F": ("claude", "adaptive", "adaptive")}
 PAIRS = [("A", "C", "적응 맥락(openai)"), ("B", "D", "적응 맥락(claude)"),
          ("C", "E", "적응 프롬프트 더함(openai)"), ("D", "F", "적응 프롬프트 더함(claude)")]
-METRICS = ("input_tokens", "output_tokens", "total_tokens", "total_ms", "retries", "cost_usd")
+METRICS = ("input_tokens", "output_tokens", "total_tokens", "total_ms", "retries", "cost_usd", "rationale_chars")
 DELTA = 0.05          # 품질 비열등 한계(사전등록)
 
 
@@ -103,6 +103,7 @@ def run_config(letter: str, slots: dict, tasks_file: dict, reps: int, provider_k
 def _row(letter, rep, task, rec, result) -> dict:
     decisions = rec["policy"]["walp_decision"]["all"]
     st = rec["policy"]["state"]
+    rats = [len(r["proposal"].get("rationale") or "") for r in result["rounds"] if "proposal" in r]
     return {"config": letter, "rep": rep, "task": task["id"], "success": rec["outcome"]["task_success"],
             "user_correction": False, "success_after_correction": None,
             "forbidden_executed": any(e["tool"] in (task.get("forbidden") or []) for e in result["executed"]),
@@ -116,7 +117,9 @@ def _row(letter, rep, task, rec, result) -> dict:
             "recovered": bool(rec["outcome"]["task_success"]) if any(v == "DENY" for v, _ in decisions) else None,
             "state_known": any(v is not None for k, v in st.items() if k != "model_version"),
             "context_plan": rec["policy"]["context_policy"]["reasons"], "prompt_plan": rec["policy"]["prompt_policy"]["reasons"],
-            "unsupported": rec["unsupported"], "outcome": result["outcome"], "simulated": rec["run"]["simulated"]}
+            "unsupported": rec["unsupported"], "outcome": result["outcome"], "simulated": rec["run"]["simulated"],
+            "rationale_chars": _mean(rats), "prompt_template": rec["policy"]["prompt_policy"].get("template"),
+            "instruction_mode": rec["policy"]["prompt_policy"]["plan"]["instruction_mode"]}
 
 
 def _mean(xs):

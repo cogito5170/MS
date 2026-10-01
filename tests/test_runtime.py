@@ -502,6 +502,25 @@ class PolicySemantics(unittest.TestCase):
         self.assertTrue(all(v is None for k, v in U.snapshot(m, sid).items() if k != "model_version"))
 
 
+class PromptText(unittest.TestCase):
+    def test_both_instruction_modes_ask_one_line_rationale(self):
+        # prompt-text-1 의 결함: concise 가 "한 줄" 을 빠뜨렸다
+        spec, m, reg, pol, *_ = world()
+        for mode in ("full", "concise"):
+            text = PromptPolicy().build(ctx_of(spec, m, reg, pol), {"instruction_mode": mode}).instruction
+            self.assertIn('"rationale"', text)
+            self.assertIn("한 줄", text, mode)
+
+    def test_template_version_recorded(self):
+        from ms.prompt import TEMPLATE_VERSION
+        spec, m, reg, *_ = world()
+        rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")})
+        rt.open_session("s", {})
+        rec = rt.handle({"session": "s", "task": "t", "queries": spec["queries"]})["record"]
+        self.assertEqual(rec["policy"]["prompt_policy"]["template"], TEMPLATE_VERSION)
+        self.assertTrue(replay(rec["policy"])["ok"])
+
+
 class ContextActions(unittest.TestCase):
     def _ctx(self, **kw):
         spec, m, reg, *_ = world(budget=100000)

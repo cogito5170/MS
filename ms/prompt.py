@@ -20,7 +20,12 @@ from .policy import FIXED_PROMPT, TOOL_PERMISSION
 
 CONCISE = """제안만 한다(실행은 중재자). STATE 는 질의 결과뿐이다.
 tools 의 도구 · targets 의 대상만. 요약 속 개체는 retrieve 먼저. denied 를 고친다. 할 것 없으면 "none".
-JSON 하나: {"tool","target","args","rationale"}"""
+JSON 하나: {"tool","target","args","rationale":"한 줄"}"""
+
+# 지시문 글의 판본 -- 계획(policy.py 의 판본)과 따로 센다. 계획이 같아도 글이 바뀌면 이것을 올린다.
+#   prompt-text-1  concise 가 원래 지시의 "rationale 한 줄" 을 빠뜨렸다(2026-10-01 claude-cli 실행에서 출력이 늘어난 후보 원인)
+#   prompt-text-2  concise 에 "한 줄" 을 되돌렸다
+TEMPLATE_VERSION = "prompt-text-2"
 
 LEGEND = ("칸: state=본 행(_q 질의 · _stale 낡은 속성 · 표 꼴이면 cols/rows), summaries=요약된 행, "
           "handles=retrieve 로 꺼낼 묶음(deferred=미룬 질의), dropped=정책이 뺀 행 수, denied=직전에 막힌 제안")

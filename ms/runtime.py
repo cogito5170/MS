@@ -27,6 +27,7 @@ from .arbiter import DENY, WalpArbiter
 from .context import ContextPolicy
 from .pipeline import Pipeline
 from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt
+from .prompt import TEMPLATE_VERSION
 from .run_telemetry import RunRecord, cost_of
 from .tools import RETRIEVE
 
@@ -76,7 +77,7 @@ class Runtime:
             raise KeyError(f"세션 {request['session']} 이 열리지 않았다(open_session)")
         state = U.snapshot(self.um, sid)
         cplan = self.ctx_sel.plan(state, self.base_context)
-        pplan = self.prompt_sel.plan(state)
+        pplan = dict(self.prompt_sel.plan(state), template=TEMPLATE_VERSION)
         choice = self.provider_policy.select(state, request)
         provider = self.providers[choice["provider"]]
         pipe = Pipeline(self.m, self.reg, provider, ContextPolicy(**cplan["params"], version=cplan["version"]),
