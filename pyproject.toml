@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ms"
+version = "0.1.0"
+description = "Model-State 층 -- 텔레메트리 -> 모형 · 상태 그래프 -> 질의 -> 맥락 정책 -> LLM 제안 -> WALP 중재자 -> 도구"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+ms = "ms.cli:main"
+
+[tool.setuptools]
+packages = ["ms"]
+
+[tool.setuptools.package-data]
+ms = ["examples/*.json", "examples/*.jsonl"]
