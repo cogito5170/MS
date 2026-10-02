@@ -10,11 +10,18 @@
 속성의 `role`:
 
     state      (기본) 해석된 값이 상태 그래프에 산다 -- temp_c 처럼 그 자체로 뜻이 있는 것
-    evidence   (아래) -- 파생의 입력으로 `<속성>__n`(창 안 표본 수) · `<속성>__sum`(창 안 합, 참거짓은 참의 개수)도 쓸 수 있다.
+    measurement  측정 창. 파생의 입력으로 `<속성>__n`(창 안 표본 수) · `<속성>__sum`(창 안 합, 참거짓은 참의 개수)도 쓸 수 있다.
                "표본 3 개 이상 · 사건 2 번 이상일 때만 판정" 같은 것을 모형이 정한다
-    evidence   상태 그래프에 **안 들어간다.** 파생 상태의 입력으로만 쓰인다. `window` 개를 모아 `agg`(last · mean · sum · max)
+    measurement  상태 그래프에 **안 들어간다.** 파생 상태의 입력으로만 쓰인다. `window` 개를 모아 `agg`(last · mean · sum · max)
                로 줄인다. 토큰 수 · 지연 같은 원 측정은 이것이다 -- `input_tokens=18000` 은 상태가 아니고,
                모형이 `input_tokens >= 0.9 × token_budget` 으로 해석한 `token_budget_pressure=HIGH` 가 상태다
+
+    config       운영자 설정(예산 · 문턱의 기준 같은 것). **관측이 아니다**(PC-03 · BD-13): 신호에 묶을 수 없고 텔레메트리로
+                 들어오지 않는다. `StateManager.configure()` 로만 정하고, 파생의 입력이 되지만 파생의 **시각에는 안 들어간다**
+                 -- 시각은 관측 입력만으로 정한다. 파생은 관측 입력이 하나는 있어야 한다.
+
+    옛 이름 `evidence` 는 받아서 `measurement` 로 바꾼다(PC-04 · BD-06: Evidence 는 근거 **참조**의 이름이다 --
+    Sensor · DC 의 evidence 는 id 참조이고, 이것은 원 측정을 창으로 모은 것이라 뜻이 다르다).
 
 정의는 JSON 으로 적을 수 있다:
 
@@ -30,11 +37,13 @@ from dataclasses import dataclass, field
 from . import predicate
 
 TYPES = ("number", "integer", "string", "bool", "enum")
+MEASUREMENT = "measurement"      # 측정 창 속성의 role (PC-04)
+CONFIG = "config"                # 운영자 설정 -- 관측이 아니다 (PC-03)
 AGGS = ("last", "mean", "sum", "max")
 
 
 def aggregate(agg: str, values: list):
-    """evidence 표본들을 하나로. 참거짓은 0/1 로 센다(mean 이 비율이 된다)."""
+    """측정 창의 표본들을 하나로. 참거짓은 0/1 로 센다(mean 이 비율이 된다)."""
     xs = [int(v) if isinstance(v, bool) else v for v in values]
     if not xs:
         return None
@@ -62,9 +71,9 @@ class PropertySpec:
     max: "float | None" = None
     values: "list | None" = None      # enum
     ttl: "float | None" = None        # None 이면 낡지 않는다(구조적 사실 -- 역할 · 위치 같은 것)
-    role: str = "state"               # state · evidence
-    window: int = 1                   # evidence: 최근 몇 개를 모으나
-    agg: str = "last"                 # evidence: last · mean · sum · max (참거짓은 0/1 로)
+    role: str = "state"               # state · measurement · config (옛 이름 evidence 는 measurement 로 읽는다)
+    window: int = 1                   # measurement: 최근 몇 개를 모으나
+    agg: str = "last"                 # measurement: last · mean · sum · max (참거짓은 0/1 로)
 
     def validate(self, v):
         """(값, 문제). 문제가 있으면 그 값은 상태가 되지 못한다."""
@@ -99,9 +108,9 @@ class PropertySpec:
 
 
 def _is_count(name: str, props: dict) -> bool:
-    """`x__n` · `x__sum` -- evidence 속성 x 의 창 안 표본 수 · 합."""
+    """`x__n` · `x__sum` -- 측정 창 속성 x 의 창 안 표본 수 · 합."""
     base = name[:-3] if name.endswith("__n") else (name[:-5] if name.endswith("__sum") else None)
-    return bool(base) and base in props and props[base].role == "evidence"
+    return bool(base) and base in props and props[base].role == MEASUREMENT
 
 
 def _apply_transform(steps, v):
@@ -167,17 +176,20 @@ class Model:
         name = d["name"]
         props = {}
         for pname, ps in (d.get("properties") or {}).items():
+            ps = dict(ps)
+            if ps.get("role") == "evidence":          # 옛 이름(PC-04)
+                ps["role"] = MEASUREMENT
             spec = PropertySpec(pname, **ps)
             if spec.type not in TYPES:
                 raise ModelError(f"{name}.{pname}: 모르는 타입 {spec.type!r}")
             if spec.type == "enum" and not spec.values:
                 raise ModelError(f"{name}.{pname}: enum 인데 values 가 없다")
-            if spec.role not in ("state", "evidence"):
+            if spec.role not in ("state", MEASUREMENT, CONFIG):
                 raise ModelError(f"{name}.{pname}: 모르는 role {spec.role!r}")
             if spec.agg not in AGGS or int(spec.window) < 1:
                 raise ModelError(f"{name}.{pname}: agg 는 {AGGS} 중 하나, window >= 1")
-            if spec.role == "state" and (spec.agg != "last" or spec.window != 1):
-                raise ModelError(f"{name}.{pname}: window · agg 는 evidence 에만")
+            if spec.role in ("state", CONFIG) and (spec.agg != "last" or spec.window != 1):
+                raise ModelError(f"{name}.{pname}: window · agg 는 measurement 에만")
             props[pname] = spec
         binds = {}
         for b in d.get("bindings") or []:
@@ -186,6 +198,8 @@ class Model:
                 raise ModelError(f"{name}: 신호 {bd.signal} 가 없는 속성 {bd.property} 에 묶였다")
             if bd.signal in binds:
                 raise ModelError(f"{name}: 신호 {bd.signal} 가 두 번 묶였다")
+            if props[bd.property].role == CONFIG:
+                raise ModelError(f"{name}: 신호 {bd.signal} 가 설정 {bd.property} 에 묶였다 -- 설정은 관측이 아니다(configure 로)")
             binds[bd.signal] = bd
         der = {}
         for dname, dd in (d.get("derived") or {}).items():
@@ -199,6 +213,8 @@ class Model:
                         raise ModelError(f"{name}.{dname}: {bad[0]}")
                     if p[0] not in props and not _is_count(p[0], props):
                         raise ModelError(f"{name}.{dname}: 없는 속성 {p[0]} 를 본다")
+            if dv.inputs and all(p in props and props[p].role == CONFIG for p in dv.inputs):
+                raise ModelError(f"{name}.{dname}: 관측 입력이 없다(설정만 본다) -- 파생의 시각을 정할 수 없다")
             der[dname] = dv
         return cls(name, props, binds, der, d.get("description", ""))
 

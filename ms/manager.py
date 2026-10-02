@@ -7,8 +7,12 @@
 
 unbound · rejected 는 격리함(`quarantine`)에 마지막 몇 개만 남는다. 그래프에는 절대 안 들어간다.
 
-모형이 `role: evidence` 로 적은 속성은 그래프가 아니라 `evidence` 창(최근 `window` 개)에 쌓이고, 파생 상태의 입력으로만 쓰인다.
+모형이 `role: measurement` 로 적은 속성은 그래프가 아니라 측정 창(`measurements`, 최근 `window` 개)에 쌓이고, 파생 상태의 입력으로만
+쓰인다(PC-04: 옛 이름 evidence. Evidence 는 근거 참조의 이름이라 바꿨다).
 그래서 질의(→ LLM)로는 원 측정이 보이지 않는다 -- 보이는 것은 모형이 해석한 상태뿐이다.
+
+모형이 `role: config` 로 적은 속성(예산 같은 운영자 설정)은 관측이 아니다(PC-03 · BD-13). 텔레메트리로 안 들어오고 `configure()`
+로만 정한다. 파생의 입력이 되지만 파생의 시각은 **관측 입력만으로** 정한다 -- 설정을 넣은 시각에 파생 상태가 묶여 늙지 않는다.
 
 **시계는 주입받는다**(PC-12 · BV-09). 기본 시계가 없다 -- 만드는 쪽(Runtime · CLI · 평가)이 정한다. 시각이 없는 관측은 받을 때 이 시계로 찍는다.
 """
@@ -19,7 +23,7 @@ from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 
 from .graph import StateGraph, Value
-from .model import Model, ModelError, RelationshipSpec, aggregate
+from .model import CONFIG, MEASUREMENT, Model, ModelError, RelationshipSpec, aggregate
 from .telemetry import Telemetry
 
 APPLIED, UNBOUND, REJECTED, STALE = "applied", "unbound", "rejected", "stale"
@@ -41,7 +45,8 @@ class StateManager:
         self.clock = clock
         self.counts: Counter = Counter()
         self.quarantine: deque = deque(maxlen=quarantine_size)
-        self.evidence: dict = defaultdict(dict)       # 개체 -> 속성 -> deque[Value] (그래프 밖)
+        self.measurements: dict = defaultdict(dict)   # 측정 창: 개체 -> 속성 -> deque[Value] (그래프 밖)
+        self.config: dict = defaultdict(dict)         # 운영자 설정: 개체 -> 속성 -> 값 (관측 아님, 시각 없음, 그래프 밖)
         for m in models:
             self.add_model(m)
         for r in relationships:
@@ -113,12 +118,12 @@ class StateManager:
         val, problem = spec.validate(raw)
         if problem:
             return self._refuse(REJECTED, t, problem)
-        if spec.role == "evidence":
-            win = self.evidence[node.id].get(b.property)
+        if spec.role == MEASUREMENT:
+            win = self.measurements[node.id].get(b.property)
             if win is not None and win and win[-1].ts > t.ts:
                 return self._refuse(STALE, t, f"{b.property} 는 이미 더 새로운 관측({win[-1].src})이 있다")
             if win is None:
-                win = self.evidence[node.id][b.property] = deque(maxlen=int(spec.window))
+                win = self.measurements[node.id][b.property] = deque(maxlen=int(spec.window))
             win.append(Value(val, t.ts, t.id))
             self.counts[APPLIED] += 1
             return IngestResult(APPLIED, t.id, "", self._derive(node.id))
@@ -133,16 +138,33 @@ class StateManager:
         self.counts[APPLIED] += 1
         return IngestResult(APPLIED, t.id, "", changes)
 
+    def configure(self, nid: str, values: dict) -> dict:
+        """운영자 설정을 정한다(관측이 아니다). 모형이 `role: config` 로 적은 속성만, 검증을 지나야 한다. 파생을 다시 계산한다."""
+        node = self.graph.nodes.get(nid)
+        if node is None:
+            raise KeyError(f"개체 {nid} 가 없다")
+        model = self.models[node.model]
+        for k, v in values.items():
+            spec = model.properties.get(k)
+            if spec is None or spec.role != CONFIG:
+                raise ModelError(f"{model.name}.{k} 는 설정(role: config)이 아니다")
+            val, problem = spec.validate(v)
+            if problem:
+                raise ModelError(f"{model.name}.{k}: {problem}")
+            self.config[nid][k] = val
+        return self._derive(nid)
+
     def _derive(self, nid: str) -> dict:
         node = self.graph.nodes[nid]
         model = self.models[node.model]
         base = {k: v.value for k, v in node.props.items() if not v.derived}
         when = {k: v.ts for k, v in node.props.items() if not v.derived}
-        for k, win in self.evidence.get(nid, {}).items():
+        for k, win in self.measurements.get(nid, {}).items():
             base[k] = aggregate(model.properties[k].agg, [v.value for v in win])
             when[k] = win[-1].ts
             base[f"{k}__n"], when[f"{k}__n"] = len(win), win[-1].ts
             base[f"{k}__sum"], when[f"{k}__sum"] = aggregate("sum", [v.value for v in win]), win[-1].ts
+        base.update(self.config.get(nid, {}))                 # 설정은 값만 -- 시각(when)은 없다
         changes = {}
         for name, d in model.derived.items():
             new = d.compute(base)
@@ -153,7 +175,8 @@ class StateManager:
                     changes[name] = (old.value, None)
                 continue
             ins = sorted(d.inputs)
-            ts = min(when[p] for p in ins) if ins else self.clock()
+            obs = [when[p] for p in ins if p in when]          # 관측 입력만(설정은 when 에 없다)
+            ts = min(obs) if obs else self.clock()
             self.graph.set_prop(nid, name, Value(new, ts, "derived:" + ",".join(ins), derived=True))
             if old is None or old.value != new:
                 changes[name] = (None if old is None else old.value, new)
@@ -163,13 +186,19 @@ class StateManager:
     def age(self, nid: str, prop: str):
         v = self.graph.nodes[nid].props.get(prop)
         if v is None:
-            win = self.evidence.get(nid, {}).get(prop)
+            win = self.measurements.get(nid, {}).get(prop)
             v = win[-1] if win else None
         return None if v is None else max(0.0, self.clock() - v.ts)
 
-    def evidence_value(self, nid: str, prop: str):
-        """evidence 의 모은 값(시험 · 진단용). 맥락 쪽은 이것을 부르지 않는다."""
-        win = self.evidence.get(nid, {}).get(prop)
+    @property
+    def evidence(self) -> dict:
+        """옛 이름 -- `measurements` 와 같은 것. **DC `dc/sources.py` 가 아직 이 이름을 읽어서** 그쪽이 바꿀 때까지만 둔다
+        (PC-04, baseline 에 요청). MS 코드는 쓰지 않는다(시험이 붙든다)."""
+        return self.measurements
+
+    def measurement_value(self, nid: str, prop: str):
+        """측정 창의 모은 값(시험 · 진단용). 맥락 쪽은 이것을 부르지 않는다."""
+        win = self.measurements.get(nid, {}).get(prop)
         if not win:
             return None
         return aggregate(self.models[self.graph.nodes[nid].model].properties[prop].agg, [v.value for v in win])

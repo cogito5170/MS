@@ -4,7 +4,7 @@
     Session   (id "session:<이름>")  한 사용 흐름. 여기서 아래 여덟 상태가 나온다
     Provider  (id "provider:<이름>") 세션이 쓴 provider. 관계 `uses`(Session -> Provider, N:N)
 
-Session 의 속성은 전부 **evidence** 다 -- 그래프(→ 질의 → LLM)에 안 들어간다. 그래프에 사는 것은 파생 상태뿐이다:
+Session 의 속성은 전부 **측정 창(measurement)** 이다 -- 그래프(→ 질의 → LLM)에 안 들어간다. 그래프에 사는 것은 파생 상태뿐이다:
 
     상태                    해석(모형이 정한 뜻)
     token_budget_pressure   마지막 실행의 input_tokens 가 token_budget 의 0.9 배 이상 HIGH · 0.6 배 이상 MEDIUM · 아니면 LOW
@@ -25,7 +25,9 @@ Session 의 속성은 전부 **evidence** 다 -- 그래프(→ 질의 → LLM)�
 """
 from __future__ import annotations
 
-MODEL_VERSION = "usage-model-3"
+# usage-model-3 -> 4 (2026-10-02, PC-03 · BD-13): 예산은 관측이 아니라 운영자 설정(role: config)이다. config.* 신호는 이제 unbound.
+#   파생 상태의 뜻 · 문턱은 그대로고, 파생의 **시각**만 바뀐다(설정을 넣은 시각이 아니라 관측 입력의 시각).
+MODEL_VERSION = "usage-model-4"
 # usage-model-2 -> 3 (2026-10-02): 뜻은 그대로, 신호 이름만 interaction.walp_denies -> interaction.arbiter_denies
 # usage-model-1 -> 2 (2026-10-01): 품질 상태(answer_reliability LOW · correction_rate HIGH)는 **사건 하나로 정하지 않는다.**
 #   재측정에서 세션 셋째 실행의 못 읽은 답 하나(1/3 = 0.33 >= 0.2)로 LOW 가 되어 품질 우선으로 뒤집혔다.
@@ -38,8 +40,8 @@ STATES = ("token_budget_pressure", "context_pressure", "latency_pressure", "task
 
 
 def _ev(type_="number", window=1, agg="last", **kw):
-    return dict(type=type_, role="evidence", window=window, agg=agg, min=0, **kw) if type_ in ("number", "integer") \
-        else dict(type=type_, role="evidence", window=window, agg=agg, **kw)
+    return dict(type=type_, role="measurement", window=window, agg=agg, min=0, **kw) if type_ in ("number", "integer") \
+        else dict(type=type_, role="measurement", window=window, agg=agg, **kw)
 
 
 def _three(prop, ref, hi, mid, names=("HIGH", "MEDIUM", "LOW")):
@@ -51,7 +53,7 @@ def _three(prop, ref, hi, mid, names=("HIGH", "MEDIUM", "LOW")):
 
 SESSION = {
     "name": "Session",
-    "description": "LLM 사용 흐름 하나. 속성은 전부 evidence, 상태는 파생만",
+    "description": "LLM 사용 흐름 하나. 속성은 전부 측정 창, 상태는 파생만",
     "properties": {
         # 마지막 실행 (window 1)
         "input_tokens": _ev("integer"), "context_tokens": _ev("integer"), "matched_rows": _ev("integer"),
@@ -60,13 +62,14 @@ SESSION = {
         "non_progress_rounds": _ev("number", 5, "mean"),
         "proposal_invalid": _ev("number", 5, "mean"), "arbiter_denies": _ev("number", 5, "mean"),
         "user_correction": _ev("bool", 10, "mean"),
-        # 상태를 정하는 데 안 쓰지만 모형이 아는 것(그래야 격리함이 아니라 evidence 로 간다)
+        # 상태를 정하는 데 안 쓰지만 모형이 아는 것(그래야 격리함이 아니라 측정 창으로 간다)
         "output_tokens": _ev("integer"), "cached_input_tokens": _ev("integer"), "retrieved_tokens": _ev("integer"),
         "total_tokens": _ev("integer"), "ttft_ms": _ev("number"), "inference_ms": _ev("number"),
         "tool_calls": _ev("number", 5, "mean"), "context_retrievals": _ev("number", 5, "mean"),
         "task_success": _ev("bool", 10, "mean"), "tool_success": _ev("bool", 10, "mean"),
-        # 설정(예산) -- 사람이 정한 것도 '일어난 일' 로 들어온다(source=config)
-        "token_budget": _ev("integer"), "context_budget": _ev("integer"), "latency_budget_ms": _ev("number"),
+        # 운영자 설정(예산) -- 관측이 아니다(PC-03 · BD-13). 텔레메트리로 안 들어오고 open_session 이 configure 로 정한다
+        "token_budget": {"type": "integer", "role": "config", "min": 0}, "context_budget": {"type": "integer", "role": "config", "min": 0},
+        "latency_budget_ms": {"type": "number", "role": "config", "min": 0},
     },
     "bindings": [
         {"signal": "tokens.input_tokens", "property": "input_tokens"},
@@ -89,9 +92,6 @@ SESSION = {
         {"signal": "interaction.context_retrievals", "property": "context_retrievals"},
         {"signal": "outcome.task_success", "property": "task_success"},
         {"signal": "outcome.tool_success", "property": "tool_success"},
-        {"signal": "config.token_budget", "property": "token_budget"},
-        {"signal": "config.context_budget", "property": "context_budget"},
-        {"signal": "config.latency_budget_ms", "property": "latency_budget_ms"},
     ],
     "derived": {
         "token_budget_pressure": _three("input_tokens", "token_budget", 0.9, 0.6),
@@ -144,14 +144,13 @@ def session_id(name: str) -> str:
     return f"session:{name}"
 
 
-def open_session(manager, name: str, budgets: dict, source="config"):
+def open_session(manager, name: str, budgets: dict):
+    """세션을 열고 예산(운영자 설정)을 정한다. 예산은 **관측이 아니라** 설정이다 -- 텔레메트리로 넣지 않는다(PC-03)."""
     install(manager)
     sid = session_id(name)
     manager.declare(sid, "Session")
-    ts = manager.clock()
-    for k in ("token_budget", "context_budget", "latency_budget_ms"):
-        if budgets.get(k) is not None:
-            manager.ingest({"source": source, "entity": sid, "signal": f"config.{k}", "value": budgets[k], "ts": ts})
+    manager.configure(sid, {k: budgets[k] for k in ("token_budget", "context_budget", "latency_budget_ms")
+                            if budgets.get(k) is not None})
     return sid
 
 
