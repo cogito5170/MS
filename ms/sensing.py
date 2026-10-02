@@ -1,5 +1,9 @@
 """② Sensor → Telemetry -- Sensor(llmsensor) 의 출력을 MS 의 텔레메트리 신호로만 편다.
 
+**BD-46 으로 대체 예정(baseline, 2026-10-02).** Sensor → MS 경로는 Sensor `llmsensor.state-export/1` → DC `SensorSource` →
+MS `Runtime(state_reader=…)` 하나다. MS 는 Sensor 의 판독(readings) · Q · 판정을 자기 그래프에 넣지 않는다(판독도 판정이다).
+이 파일은 **더 넓히지 않는다**: 칸 · 센서를 더하지 않는다. DC 경로가 확인되면 걷어 낸다.
+
 MS 는 Sensor 를 import 하지 않는다. 계약은 `llmsensor.sense()` 출력의 **데이터 꼴**(dict 또는 JSON)이다.
 선행조사: `paper/선행조사/센서배선.md`.
 

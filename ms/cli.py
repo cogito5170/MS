@@ -43,12 +43,17 @@ DEMO_SCRIPT = [
 ]
 
 
-def load(spec_path, telemetry_path=None, now=None):
+def clock_for(spec: dict, now=None):
+    """세계의 시계: 명세에 `now` 가 있으면 그 시각에 멈춘 시계, 없으면 벽시계. 시계를 고르는 곳은 여기 하나다(PC-12)."""
+    fixed = now if now is not None else spec.get("now")
+    return (lambda: float(fixed)) if fixed is not None else time.time
+
+
+def load(spec_path, telemetry_path=None, now=None, clock=None):
+    """clock 을 주면 그 시계를 쓴다(평가처럼 세계를 여러 번 지어도 시계는 하나여야 할 때)."""
     with open(spec_path, encoding="utf-8") as f:
         spec = json.load(f)
-    fixed = now if now is not None else spec.get("now")
-    clock = (lambda: float(fixed)) if fixed is not None else time.time
-    m = StateManager.from_spec(spec, clock=clock)
+    m = StateManager.from_spec(spec, clock=clock or clock_for(spec, now))
     reg = ToolRegistry(spec.get("tools", ()))
     results = []
     if telemetry_path:

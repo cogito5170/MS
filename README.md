@@ -25,6 +25,8 @@ Telemetry → State → CR(맥락) → Provider → LLM → Arbiter
 
 > **Sensor 배선(②, 2026-10-02)**: `ms/sensing.py` 가 llmsensor 의 `sense()` 출력을 텔레메트리 신호로만 편다 -- 측정 · 관측 · 잔차는
 > 수만 받고, Sensor 의 추정(Q) · 판정은 받지 않는다. `pip install ".[sensor]"` 로 Sensor 를 함께 깔 수 있다(선택).
+> **BD-46 으로 대체 예정**: baseline 결정으로 Sensor 상태는 Sensor state-export → DC → `Runtime(state_reader=…)` 한 길로만 온다.
+> `sensing.py` 는 더 넓히지 않고, 그 길이 확인되면 걷어 낸다. CR 의 자리(BD-21)와 Validate · Arbitrate · Guard 배분(BD-24)은 `docs/계획.md`.
 
 ## 세 가지를 섞지 않는다
 
@@ -131,7 +133,7 @@ run          run_id · session_id · provider · model · timestamp · simulated
 tokens       input_tokens · output_tokens · cached_input_tokens · context_tokens* · retrieved_tokens* · total_tokens
 latency      ttft_ms (스트리밍일 때만) · inference_ms · total_ms
 interaction  llm_calls · tool_calls · retries · context_retrievals · arbiter_denies · proposal_invalid · non_progress_rounds
-outcome      task_success (그래프로 판정, 기준이 없으면 None) · user_correction (피드백으로) · tool_success
+outcome      task_success (Runtime 은 채우지 않는다 -- 평가 하니스가 그래프로 판정해 evaluation() 으로 돌려준다, PC-13) · user_correction (피드백으로) · tool_success
 decision_ref 이 실행을 낸 결정 기록의 id ← 결정의 내용은 여기 없다(아래)
 cost         usd · source (provider | price_table | None)
 estimated    * 추정한 칸과 방법        unsupported  못 해서 안 보낸 옵션        extensions  provider 고유 값

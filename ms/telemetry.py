@@ -5,11 +5,13 @@ Telemetry 는 "어디서 · 무슨 신호가 · 언제 · 어떤 값을 냈다" 
 그래서 이 모듈에는 그래프를 건드리는 길이 없다 -- 상태가 되는 길은 `StateManager.ingest` 하나다.
 
 도구의 결과도 Telemetry 로 되돌아온다(`source="tool:<이름>"`). 도구가 "끝냈다" 고 말해도 그것은 관측이다.
+
+**이 모듈은 시계를 읽지 않는다**(PC-12 · BV-09). `ts` 를 안 주면 None 이고, 받는 State Manager 가 **주입받은 시계**로 찍는다.
+시계는 하나다 -- Runtime(또는 CLI)이 State Manager 에 준 것.
 """
 from __future__ import annotations
 
 import itertools
-import time
 from dataclasses import dataclass, field
 
 _ids = itertools.count(1)
@@ -21,7 +23,7 @@ class Telemetry:
     entity: str            # 어느 개체에 대한 관측이라고 **주장하는가** (그 개체가 있는지는 State Manager 가 본다)
     signal: str            # 신호 이름 -- 속성 이름이 아니다. 무슨 속성인지는 Model 의 binding 이 정한다
     value: object
-    ts: float = field(default_factory=time.time)
+    ts: "float | None" = None    # 없으면 받는 State Manager 가 자기(주입받은) 시계로 찍는다
     meta: dict = field(default_factory=dict)
     id: str = field(default_factory=lambda: f"t{next(_ids)}")
 
