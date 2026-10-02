@@ -1,5 +1,9 @@
 {
  "description": "데이터센터 세계(서버 12 · 랙 2) 위의 과업 7 개. 과업마다 세계를 새로 짓는다. 성공은 최종 상태 그래프로 본다 -- LLM 이 판정하지 않는다.",
+ "version": "datacenter-tasks-2",
+ "changes": [
+  "datacenter-tasks-1 -> 2 (2026-10-02, baseline BD-49 · X4): t6-all-normal 의 세계가 다 정상이 아니었다 -- srv05 의 팬 고장이 남아 그 서버에 티켓을 연 것을 실패로 셌다. srv05 fan_state=ok 를 더해 세계를 정말 다 정상으로 만든다(과업 글 · 성공 기준은 그대로). 판본 1 의 결과와 바로 견주지 않는다."
+ ],
  "world": {
   "spec": "ms/examples/datacenter.json",
   "telemetry": "ms/examples/datacenter_telemetry.jsonl"
@@ -126,6 +130,13 @@
      "entity": "srv07",
      "signal": "cpu_temp",
      "value": 61,
+     "ts": 999
+    },
+    {
+     "source": "bmc",
+     "entity": "srv05",
+     "signal": "fan_state",
+     "value": "ok",
      "ts": 999
     }
    ],
