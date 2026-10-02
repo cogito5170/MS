@@ -190,12 +190,6 @@ class StateManager:
             v = win[-1] if win else None
         return None if v is None else max(0.0, self.clock() - v.ts)
 
-    @property
-    def evidence(self) -> dict:
-        """옛 이름 -- `measurements` 와 같은 것. **DC `dc/sources.py` 가 아직 이 이름을 읽어서** 그쪽이 바꿀 때까지만 둔다
-        (PC-04, baseline 에 요청). MS 코드는 쓰지 않는다(시험이 붙든다)."""
-        return self.measurements
-
     def measurement_value(self, nid: str, prop: str):
         """측정 창의 모은 값(시험 · 진단용). 맥락 쪽은 이것을 부르지 않는다."""
         win = self.measurements.get(nid, {}).get(prop)

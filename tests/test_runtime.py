@@ -972,7 +972,7 @@ class MeasurementWindowName(unittest.TestCase):
         self.assertEqual(m.properties["a"].role, "measurement")
 
     def test_ms_code_does_not_use_the_old_name(self):
-        """`StateManager.evidence` 는 DC 가 아직 읽어서 남긴 별칭이다. MS 안에서는 아무도 그것을 읽지 않는다."""
+        """옛 이름 evidence 를 MS 안에서 아무도 읽지 않는다(호환 속성은 BD-71 로 뗐다 -- DC 가 measurements 로 옮겼다)."""
         hits = []
         for root, _, files in os.walk(os.path.join(ROOT, "ms")):
             for f in files:
@@ -984,11 +984,12 @@ class MeasurementWindowName(unittest.TestCase):
                              if isinstance(n, ast.Constant) and n.value == "evidence" and f != "model.py"]
         self.assertEqual(hits, [])
 
-    def test_alias_is_the_same_window(self):
+    def test_old_name_is_gone(self):
+        """BD-71 · CMD-M7: 호환 속성 StateManager.evidence 를 뗐다. 측정 창은 measurements 하나다."""
         m = StateManager(clock=Clock())
         U.open_session(m, "s", {"token_budget": 10})
         m.ingest({"source": "ms:run", "entity": "session:s", "signal": "tokens.input_tokens", "value": 5})
-        self.assertIs(m.evidence, m.measurements)
+        self.assertFalse(hasattr(m, "evidence"))
         self.assertIn("input_tokens", m.measurements["session:s"])
 
 
