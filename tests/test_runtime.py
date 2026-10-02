@@ -446,6 +446,53 @@ class ProviderCannotChangeSemantics(unittest.TestCase):
         self.assertIn("token_budget_pressure", rows)
 
 
+# -- 상태 읽기의 자리(state_reader) -- Decision Context 층을 꽂는 곳. MS 는 그 패키지를 import 하지 않는다 ---------------
+class StateReaderSeam(unittest.TestCase):
+    def _rt(self, reader=None):
+        spec, m, reg, *_ = world()
+        rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")}, context_selector=AdaptiveContext(),
+                     prompt_selector=AdaptivePrompt(), base_context={"budget_chars": 1500}, state_reader=reader)
+        rt.open_session("s", {"token_budget": 300, "context_budget": 200, "latency_budget_ms": 5000})
+        return spec, rt
+
+    def _two(self, rt, spec):
+        rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        self.assertNotIn("policy", out["record"])               # 출처는 텔레메트리가 아니라 결정 기록에 산다
+        self.assertEqual(out["record"]["decision_ref"], out["decision"]["id"])
+        return out["decision"]
+
+    def test_default_is_snapshot_and_says_so(self):
+        spec, rt = self._rt()
+        rec = self._two(rt, spec)
+        self.assertEqual(rec["state_source"], {"kind": "usage_model.snapshot", "model_version": U.MODEL_VERSION})
+        self.assertEqual(rec["state"]["token_budget_pressure"], "HIGH")
+        self.assertLess(rec["context_policy"]["params"]["budget_chars"], 1500)    # 대조: 압력으로 줄였다
+
+    def test_reader_decides_what_cr_sees_and_is_recorded(self):
+        seen = []
+
+        def reader(um, sid):             # 예: 결정 문맥이 압력 상태를 STALE 로 보고 '모름' 으로 돌렸다
+            snap = U.snapshot(um, sid)
+            seen.append(snap["token_budget_pressure"])
+            return {"state": dict(snap, token_budget_pressure=None, context_pressure=None, decision_context="dc-x"),
+                    "record": {"id": "dc-x", "digest": "ab" * 32, "purpose": "context_runtime"}}
+        spec, rt = self._rt(reader)
+        rec = self._two(rt, spec)
+        self.assertEqual(seen[-1], "HIGH")                                   # 스냅숏은 HIGH 였는데
+        self.assertIsNone(rec["state"]["token_budget_pressure"])  # CR 은 꽂은 쪽이 준 것을 봤다
+        self.assertEqual(rec["context_policy"]["params"]["budget_chars"], 1500)
+        self.assertEqual(rec["state_source"]["id"], "dc-x")
+        self.assertEqual(rec["state"]["decision_context"], "dc-x")
+        self.assertTrue(replay(json.loads(json.dumps(rec)))["ok"])    # 재현은 그대로
+
+    def test_reader_cannot_smuggle_raw_measurements_or_objects(self):
+        for bad in ({"input_tokens": 18000}, {"token_budget_pressure": {"v": "HIGH"}}, {"graph": "x"}):
+            spec, rt = self._rt(lambda um, sid, b=bad: {"state": dict(U.snapshot(um, sid), **b)})
+            with self.assertRaises(ValueError):
+                rt.handle({"session": "s", "task": "t", "queries": spec["queries"]})
+
+
 # -- 10. 정책 결정은 기록된 상태 + 판본으로 재현된다 ------------------------------------------------------------
 class Reproducible(unittest.TestCase):
     def _records(self):

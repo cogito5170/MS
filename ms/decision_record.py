@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 SCHEMA_VERSION = "ms-decision-record-1"
 BODY = ("cr", "state", "context_policy", "prompt_policy", "provider_policy", "arbiter_decision", "inputs", "schema")
@@ -25,6 +25,7 @@ class DecisionRecord:
     arbiter_decision: dict      # {"final": …, "all": [[verdict, rule], …]}
     inputs: dict                # 재현에 필요한 설정(base_context · default_provider)
     schema: str = SCHEMA_VERSION
+    state_source: dict = field(default_factory=dict)   # 정책이 본 상태의 출처(state_reader 의 record -- 예: 결정 문맥 id · digest)
 
     @property
     def id(self) -> str:
@@ -36,6 +37,8 @@ class DecisionRecord:
 
 def decision_id(d: dict) -> str:
     body = {k: d[k] for k in BODY}
+    if d.get("state_source"):          # 출처가 있을 때만 id 에 든다 -- 출처 없이 지은 앞의 결정 기록의 id 는 그대로다
+        body["state_source"] = d["state_source"]
     return "dec-" + hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True, default=str)
                                    .encode("utf-8")).hexdigest()[:16]
 
