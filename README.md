@@ -25,6 +25,9 @@ Telemetry → State → CR(맥락) → Provider → LLM → Arbiter
 
 > **Sensor 배선(②, 2026-10-02)**: `ms/sensing.py` 가 llmsensor 의 `sense()` 출력을 텔레메트리 신호로만 편다 -- 측정 · 관측 · 잔차는
 > 수만 받고, Sensor 의 추정(Q) · 판정은 받지 않는다. `pip install ".[sensor]"` 로 Sensor 를 함께 깔 수 있다(선택).
+> **질의도 결정 문맥을 거친다(PC-23, cr-2)**: `state_reader` 가 인자를 셋 받으면 요청을 넘기고, 리더가 질의 결과(`queries`)를 돌려주면
+> CR 은 그래프에 직접 묻지 않고 그것으로 맥락을 짓는다. **낡은 값은 LLM 에 안 간다**(BD-65): 값은 null · `_unusable`. 질의에
+> `allow_stale: true` 를 명시할 때만 값과 `_stale` 표시를 보인다(지금 그렇게 하는 질의는 없다).
 > **BD-46 으로 대체 예정**: baseline 결정으로 Sensor 상태는 Sensor state-export → DC → `Runtime(state_reader=…)` 한 길로만 온다.
 > `sensing.py` 는 더 넓히지 않고, 그 길이 확인되면 걷어 낸다. CR 의 자리(BD-21)와 Validate · Arbitrate · Guard 배분(BD-24)은 `docs/계획.md`.
 

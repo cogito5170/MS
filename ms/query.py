@@ -20,6 +20,8 @@ ToolQuery 는 결과의 개체마다 어떤 도구를 **지금** 쓸 수 있는�
 """
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass, field
 
 from . import predicate
@@ -39,6 +41,7 @@ class StateQuery:
     priority: int = 0
     must: list = field(default_factory=list)
     droppable: list = field(default_factory=list)
+    allow_stale: bool = False   # 낡은 속성 값도 LLM 에 보인다(_stale 표시와 함께). 아니면 값은 None 이고 _unusable (BD-65)
 
     @classmethod
     def from_dict(cls, d: dict) -> "StateQuery":
@@ -55,7 +58,7 @@ class Row:
     id: str
     model: str
     version: int
-    props: dict             # 이름 -> {"value", "age", "stale"}
+    props: dict             # 이름 -> {"value", "age", "stale"[, "usable"]}  usable 이 False 면 값을 쓸 수 없다(값 None)
     must: bool = False
     edges: list = field(default_factory=list)   # [관계, 출발, 도착] -- 양끝이 다 결과 안에 있는 것만
 
@@ -66,8 +69,10 @@ class Row:
         out = {"id": self.id, "model": self.model}
         for k, v in self.props.items():
             out[k] = v["value"]
-            if v["stale"]:
-                out.setdefault("_stale", []).append(k)
+            if not v.get("usable", True):
+                out.setdefault("_unusable", []).append(k)       # 값을 모른다(낡음 · 모름) -- 지어내지 않는다
+            elif v["stale"]:
+                out.setdefault("_stale", []).append(k)          # 질의가 allow_stale 을 명시해서 낡은 값을 보인다
         if self.edges:
             out["_edges"] = self.edges
         return out
@@ -167,3 +172,36 @@ def tool_query(registry, results, manager) -> list:
         if ok:
             offers.append(ToolOffer(t.name, ok, t.card()))
     return offers
+
+
+def withhold_stale(res: QueryResult, allow_stale: bool) -> QueryResult:
+    """BD-65: 낡은 속성 값은 LLM 쪽으로 내지 않는다(값 None · usable False). 질의가 allow_stale 을 명시했을 때만 값과 _stale 표시를 둔다.
+    `run_query` 자체는 그대로다 -- 중재자 · 도구 조건 · DC 의 MSGraphSource 는 원래 값과 stale 표시를 본다."""
+    if allow_stale:
+        return res
+    rows = []
+    for r in res.rows:
+        props = {k: ({"value": None, "age": v["age"], "stale": True, "usable": False} if v["stale"] else v)
+                 for k, v in r.props.items()}
+        rows.append(Row(r.id, r.model, r.version, props, r.must, r.edges))
+    return QueryResult(res.name, rows, res.matched, res.priority, res.droppable)
+
+
+USABLE = ("OBSERVED", "DERIVED", "INFERRED")        # DC 의 유효성 가운데 '지금 값' 으로 쓸 수 있는 것
+
+
+def result_from_dc(name: str, q: dict, manager) -> QueryResult:
+    """DC 결정 문맥의 질의 결과(core: rows [{id, model, props {속성: [값 | None, 유효성]}, must, edges}], matched, priority,
+    droppable) -> MS QueryResult. 값과 유효성은 DC 가 정한 그대로다(쓸 수 없으면 None). 판(version)은 MS 세계 그래프에서
+    읽는다 -- DC 는 판을 싣지 않고, 결정 문맥은 이 요청의 시작에 같은 그래프로 지었다(그 사이에 들어온 관측이 없다)."""
+    rows = []
+    for r in q["rows"]:
+        node = manager.graph.nodes.get(r["id"])
+        props = {}
+        for p, (v, st) in sorted(r["props"].items()):
+            props[p] = {"value": v, "age": None, "stale": st == "STALE", "usable": st in USABLE or (st == "STALE" and v is not None)}
+        rows.append(Row(r["id"], r["model"], node.version if node is not None else -1, props, bool(r.get("must")),
+                        [list(e) for e in r.get("edges", ())]))
+    drop = q.get("droppable", [])
+    return QueryResult(name, rows, int(q["matched"]), int(q.get("priority", 0)),
+                       json.loads(drop) if isinstance(drop, str) else list(drop))

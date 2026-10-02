@@ -23,9 +23,9 @@ from dataclasses import dataclass, field
 from .context import ContextPolicy
 from .policy import BASE_CONTEXT, FixedContext, FixedPrompt
 from .prompt import DEFAULT_LAYOUT, TEMPLATE_VERSIONS, PromptPolicy
-from .query import StateQuery, run_query, tool_query
+from .query import QueryResult, StateQuery, result_from_dc, run_query, tool_query, withhold_stale
 
-VERSION = "cr-1"
+VERSION = "cr-2"     # cr-1 -> 2 (2026-10-02, PC-23 · BD-65): 결정 문맥의 질의 결과를 받는다 · 낡은 값은 allow_stale 없이는 None
 
 
 def prefix_hash(text: str) -> str:
@@ -67,19 +67,39 @@ class ContextRuntime:
                    retrieve_max)
 
     # -- 계획 -> 결정 ---------------------------------------------------------------------------------------------
-    def minimal_context(self, manager, task, queries, retrieved_ids=(), denied=()):
+    def minimal_context(self, manager, task, queries, retrieved_ids=(), denied=(), supplied=None):
+        """supplied: 결정 문맥(DC)이 이미 돌린 질의 결과 {이름: core 질의}. 있으면 그래프에 직접 묻지 않고 그것을 쓴다(PC-23) --
+        낡은 값은 DC 가 이미 None 으로 막았다. 없으면 run_query 로 묻고 낡은 값은 여기서 막는다(BD-65, 질의의 allow_stale 이 없으면)."""
         qs = [q if isinstance(q, StateQuery) else StateQuery.from_dict(q) for q in queries]
-        results = [run_query(q, manager) for q in qs]
+        if supplied is not None:
+            missing = [q.name for q in qs if q.name not in supplied]
+            if missing:
+                raise ValueError(f"결정 문맥에 질의 {missing} 의 결과가 없다")
+            results = [result_from_dc(q.name, supplied[q.name], manager) for q in qs]
+        else:
+            results = [withhold_stale(run_query(q, manager), q.allow_stale) for q in qs]
         retrieved = []
         if retrieved_ids:
-            rq = run_query(StateQuery("retrieved", ids=list(retrieved_ids), limit=self.retrieve_max), manager)
+            if supplied is not None:          # 꺼낼 행도 결정 문맥 안에서만(다시 그래프에 묻지 않는다)
+                pool = {}
+                for r in results:
+                    for row in r.rows:
+                        pool.setdefault(row.id, row)
+                rows = [pool[i] for i in dict.fromkeys(retrieved_ids) if i in pool][: self.retrieve_max]
+                rq = QueryResult("retrieved", rows, len(rows))
+            else:                             # 낡은 값은 그 행을 낸 질의가 allow_stale 을 명시했을 때만
+                ok = {row.id for q, r in zip(qs, results) if q.allow_stale for row in r.rows}
+                raw = run_query(StateQuery("retrieved", ids=list(retrieved_ids), limit=self.retrieve_max), manager)
+                rq = QueryResult("retrieved", [row if row.id in ok else withhold_stale(
+                    QueryResult("", [row], 1), False).rows[0] for row in raw.rows], raw.matched)
             retrieved = rq.rows
             results = results + [rq]          # 청한 행에도 도구를 고를 수 있게
         offers = tool_query(self.reg, results, manager)
         return self.policy.build(task, [r for r in results if r.name != "retrieved"], offers, retrieved, denied)
 
-    def decide(self, manager, task, queries, retrieved_ids=(), denied=(), preamble: str = "") -> ContextDecision:
-        ctx = self.minimal_context(manager, task, queries, retrieved_ids, denied)
+    def decide(self, manager, task, queries, retrieved_ids=(), denied=(), preamble: str = "",
+               supplied=None) -> ContextDecision:
+        ctx = self.minimal_context(manager, task, queries, retrieved_ids, denied, supplied)
         prompt = self.prompt_policy.build(ctx, self.prompt_plan, preamble)
         record = {"cr": self.version, "context_version": self.policy.version, "layout": self.layout,
                   "template": self.prompt_policy.version, "prefix_hash": prefix_hash(prompt.system_text()),

@@ -95,12 +95,14 @@ class Lane:
         install(self.usage)
         self.sess, self.opened = f"{letter}-r{rep}", False
         self.layout, self.fresh = layout, fresh          # fresh: 이 평가 실행의 표지(None 이면 안 붙임)
-        self.reader = state_reader(self.usage) if state_reader else None    # 상태 읽기(예: DC). None 이면 usage_model.snapshot
+        self.make_reader = state_reader        # (사용 상태, 세계) -> 리더. 과업마다 세계가 새로 서서 리더도 그때 짓는다
+        self.reader = None
 
     def run_task(self, task, log=print) -> dict:
         tf, row = self.tf, None
         for attempt in (0, 1):
             spec, world, reg = _world(tf, task, self.clock)
+            self.reader = self.make_reader(self.usage, world) if self.make_reader else None
             rt = Runtime(world, reg, {self.pname: self.provider}, grants=tf.get("grants", ()),
                          context_selector=CONTEXT[self.cmode](),
                          state_reader=self.reader,
@@ -356,7 +358,10 @@ def report_md(rep: dict) -> str:
 
 
 def dc_state_reader():
-    """DC(cogito5170/DC)의 MSStateReader 를 레인마다 하나씩 짓는 공장. DC 는 선택 의존이다 -- 경로는 MS_DC_PATH(기본 ../DC).
+    """DC(cogito5170/DC)로 상태 · 질의 결과를 읽는 리더의 공장(과업마다 하나). DC 는 선택 의존이다 -- 경로는 MS_DC_PATH(기본 ../DC).
+    소스 둘: MSUsageSource(세션 상태) · MSGraphSource(세계 그래프 질의, MS 의 run_query 를 주입). 요청의 질의를 DC 에 넘겨
+    목적 context_runtime 의 결정 문맥을 짓고, 상태는 policy_state 로 · 질의 결과는 core 그대로 돌려준다(PC-23).
+    DC 의 MSStateReader 는 아직 요청을 받지 않아서 같은 일을 여기서 한다(DC 에 요청함).
     S5: 읽을 때마다 같은 세션의 usage_model.snapshot 과 견주어 다른 상태 이름을 `diff` 에 남긴다. 평가의 시계가 멈춰 있어
     낡음 때문에 갈리지는 않는다. 다만 DC 의 목적 context_runtime(purpose-cr-1)은 CR 선택기가 읽는 일곱 상태만 투영한다 --
     tool_churn 은 DC 길에서 늘 None 이다(어느 선택기도 그것을 안 읽는다)."""
@@ -367,7 +372,10 @@ def dc_state_reader():
     if os.path.isdir(os.path.join(path, "dc")) and path not in sys.path:
         sys.path.insert(0, path)
     try:
-        from dc import DecisionContextBuilder, MSStateReader, MSUsageSource
+        from dc import DecisionContextBuilder, MSUsageSource
+        from dc import MSGraphSource
+        from dc.bridge import policy_state
+        from .query import StateQuery, run_query
     except ImportError as e:
         raise ImportError(f"state_reader=dc 인데 DC 를 못 읽는다({e}) -- MS_DC_PATH 에 cogito5170/DC 를 두어라") from e
     try:
@@ -377,15 +385,34 @@ def dc_state_reader():
         head = None
 
     class Reader:
-        def __init__(self, usage):
-            self.inner = MSStateReader(DecisionContextBuilder([MSUsageSource(usage, U.MODEL_VERSION)]), "context_runtime")
+        def __init__(self, usage, world):
+            self.b = DecisionContextBuilder([MSUsageSource(usage, U.MODEL_VERSION),
+                                             MSGraphSource(world, run_query=run_query, make_query=StateQuery.from_dict)])
             self.diff = None
+            self.last = None
 
-        def __call__(self, um, sid):
-            out = self.inner(um, sid)
+        def __call__(self, um, sid, request=None):
+            qs = []
+            for q in (request or {}).get("queries", ()):
+                q = dict(q)
+                if q.pop("allow_stale", False):
+                    raise ValueError(f"질의 {q.get('name')} 가 allow_stale 을 명시했는데 DC 의 요청 질의는 아직 그것을 못 받는다(DC 에 요청함)")
+                qs.append({"source": "ms_world", **q})
+            nows = {n: s.now_ms() for n, s in self.b.sources.items()}
+            ctx = self.b.build("context_runtime", {"session": sid}, now_ms=nows, queries=qs)
+            self.last = ctx
+            state = policy_state(ctx, "session")
+            for _, versions in ctx.provenance.sources:
+                model = dict(versions).get("model")
+                if model:
+                    state["model_version"] = model
             snap = U.snapshot(um, sid)
-            self.diff = [k for k in U.STATES if out["state"].get(k) != snap.get(k)]
-            return out
+            self.diff = [k for k in U.STATES if state.get(k) != snap.get(k)]
+            return {"state": state,
+                    "record": {"id": ctx.id, "digest": ctx.digest, "purpose": ctx.purpose,
+                               "purpose_version": ctx.core.purpose_version, "reuse_key": ctx.reuse_key,
+                               "complete": ctx.validity.complete, "uncertain": list(ctx.validity.uncertain)},
+                    "queries": {q.name: q.to_dict() for q in ctx.core.queries}}
 
     return Reader, {"kind": "dc", "path": os.path.abspath(path), "commit": head, "purpose": "context_runtime"}
 

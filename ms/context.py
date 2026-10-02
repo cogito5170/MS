@@ -47,9 +47,13 @@ def summarize(rows) -> dict:
                 names.append(k)
     props = {}
     for k in names:
-        vals = [r.props[k]["value"] for r in rows if k in r.props]
+        allv = [r.props[k]["value"] for r in rows if k in r.props]
+        vals = [v for v in allv if v is not None]           # 쓸 수 없는 값(None)은 요약에 안 넣고 수만 센다
+        unknown = len(allv) - len(vals)
         nums = [v for v in vals if isinstance(v, (int, float)) and not isinstance(v, bool)]
-        if nums and len(nums) == len(vals):
+        if not vals:
+            props[k] = {"n": 0}
+        elif nums and len(nums) == len(vals):
             props[k] = {"min": min(nums), "max": max(nums), "mean": round(sum(nums) / len(nums), 3), "n": len(nums)}
         else:
             dist = {}
@@ -60,6 +64,8 @@ def summarize(rows) -> dict:
             props[k] = {"values": {json.loads(a): b for a, b in top}, "n": len(vals)}
             if len(dist) > 5:
                 props[k]["other"] = len(dist) - 5
+        if unknown:
+            props[k]["unknown"] = unknown
     out["props"] = props
     stale = sum(1 for r in rows if any(v["stale"] for v in r.props.values()))
     if stale:

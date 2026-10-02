@@ -93,11 +93,12 @@ class Pipeline:
                 else 0, "native_tool_calls": len(resp.tool_calls)}
         return resp, info
 
-    def run(self, task: str, queries, max_rounds: int = 4, retry_on_deny: bool = True) -> RunResult:
+    def run(self, task: str, queries, max_rounds: int = 4, retry_on_deny: bool = True, supplied=None) -> RunResult:
+        """supplied: 결정 문맥이 이미 돌린 질의 결과(PC-23). 있으면 CR 이 그래프에 직접 묻지 않는다."""
         res = RunResult()
         retrieved, denied = [], []
         for i in range(max_rounds):
-            cd = self.cr.decide(self.m, task, queries, retrieved, denied, self.preamble)
+            cd = self.cr.decide(self.m, task, queries, retrieved, denied, self.preamble, supplied)
             ctx = cd.ctx
             rnd = {"round": i + 1}
             res.rounds.append(rnd)

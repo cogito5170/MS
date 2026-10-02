@@ -14,7 +14,9 @@ MS 는 provider 가 아니다. 추론은 provider 가 하고, MS 는 그 위에�
 세계를 새로 짓고 세션 상태는 이어 가야 해서 따로 둔다. 어느 쪽이든 같은 Model · Relationship 구조다.
 
 **상태 읽기의 자리(`state_reader`).** 기본은 `usage_model.snapshot` 이다. Decision Context 층(cogito5170/DC)처럼 신선도 · 근거를
-검사하는 쪽을 꽂으려면 `state_reader(usage_manager, sid) -> {"state": {상태: 값 | None}, "record": {...} | None}` 을 준다.
+검사하는 쪽을 꽂으려면 `state_reader(usage_manager, sid[, request]) -> {"state": {상태: 값 | None}, "record": {...} | None
+[, "queries": {질의 이름: core 질의}]}` 을 준다. 인자를 셋 받는 리더에는 요청을 넘긴다(요청의 `queries` 를 DC 가 돌리게, PC-23).
+`queries` 를 돌려주면 CR 은 그래프에 직접 묻지 않고 그 결과(값 · 유효성은 DC 가 정한 그대로)로 맥락을 짓는다.
 MS 는 그 패키지를 import 하지 않는다. 받은 `state` 는 사용 상태 이름(STATES)과 스칼라 값만 허락한다 -- 원 측정 · 객체를 정책 쪽으로
 몰래 넣지 못한다. `record`(예: 결정 문맥의 id · digest)는 **결정 기록**(`DecisionRecord.state_source`)에 남는다 -- 실행 기록(텔레메트리)이 아니다.
 
@@ -27,6 +29,7 @@ Runtime 은 요청의 `success` · `forbidden` · `expect_noop` 을 읽지 않�
 """
 from __future__ import annotations
 
+import inspect
 import itertools
 import json
 import time
@@ -42,6 +45,25 @@ from .run_telemetry import RunRecord, cost_of
 from .tools import RETRIEVE
 
 _ids = itertools.count(1)
+
+
+_SCALAR = (str, int, float, bool, type(None))
+
+
+def _check_supplied(supplied: dict, names: list):
+    """결정 문맥이 준 질의 결과의 꼴 -- 요청한 질의 전부 · 행마다 id · model · props {속성: [스칼라, 유효성 글자]}. 객체를 몰래 못 넣는다."""
+    if not isinstance(supplied, dict) or set(supplied) != set(names):
+        raise ValueError(f"state_reader 의 질의 결과가 요청 질의와 다르다: {sorted(supplied) if isinstance(supplied, dict) else supplied} != {sorted(names)}")
+    for name, q in supplied.items():
+        if not isinstance(q.get("rows"), list) or not isinstance(q.get("matched"), int):
+            raise ValueError(f"질의 {name}: rows · matched 가 없다")
+        for r in q["rows"]:
+            if not isinstance(r.get("id"), str) or not isinstance(r.get("props"), dict):
+                raise ValueError(f"질의 {name}: 행의 꼴이 아니다")
+            for p, pv in r["props"].items():
+                if not (isinstance(pv, (list, tuple)) and len(pv) == 2 and isinstance(pv[0], _SCALAR) and isinstance(pv[1], str)):
+                    raise ValueError(f"질의 {name}: {r['id']}.{p} 는 [스칼라 값, 유효성] 이어야 한다")
+    json.dumps(supplied)
 
 
 class Runtime:
@@ -82,7 +104,7 @@ class Runtime:
         sid = U.session_id(request["session"])
         if sid not in self.um.graph.nodes:
             raise KeyError(f"세션 {request['session']} 이 열리지 않았다(open_session)")
-        state, source = self._read_state(sid)
+        state, source, supplied = self._read_state(sid, request)
         plan = ContextRuntime.plan(state, self.ctx_sel, self.prompt_sel, self.base_context, self.prompt_layout)
         cplan, pplan = plan["context_policy"], plan["prompt_policy"]
         choice = self.provider_policy.select(state, request)
@@ -95,7 +117,8 @@ class Runtime:
                         tool_mode=request.get("tool_mode", "text"), preamble=request.get("preamble", ""),
                         cr=ContextRuntime.from_plan(self.reg, plan), recorder=l0rec,
                         provider_label=choice["provider"])
-        res = pipe.run(request["task"], request.get("queries", ()), max_rounds=request.get("max_rounds", self.max_rounds))
+        res = pipe.run(request["task"], request.get("queries", ()), max_rounds=request.get("max_rounds", self.max_rounds),
+                       supplied=supplied)
         total_ms = (self.wall() - t0) * 1000
         dec, rec = self._record(request, sid, state, cplan, pplan, choice, provider, res, total_ms, run_id, source)
         # 끝 요약: 런타임(MS)이 아는 사실만. 비용은 provider 가 보고했을 때만(가격표 계산은 L0 가 아니다)
@@ -112,11 +135,16 @@ class Runtime:
         self._ledger({"kind": "run", "record": rec.to_dict()})
         return {"run_id": rec.run["run_id"], "record": rec.to_dict(), "decision": dec.to_dict(), "result": res.to_dict()}
 
-    def _read_state(self, sid: str):
-        """정책 · CR 이 볼 상태와 그 출처. 꽂은 읽기가 무엇을 주든 사용 상태 이름과 스칼라 값만 통과시킨다."""
+    def _read_state(self, sid: str, request: "dict | None" = None):
+        """정책 · CR 이 볼 상태와 그 출처(, 결정 문맥이 돌린 질의 결과). 꽂은 읽기가 무엇을 주든 사용 상태 이름과 스칼라 값만,
+        질의 결과는 정해진 꼴(행 · 스칼라 값 · 유효성 글자)만 통과시킨다."""
         if self.state_reader is None:
-            return U.snapshot(self.um, sid), {"kind": "usage_model.snapshot", "model_version": U.MODEL_VERSION}
-        out = self.state_reader(self.um, sid)
+            return U.snapshot(self.um, sid), {"kind": "usage_model.snapshot", "model_version": U.MODEL_VERSION}, None
+        try:
+            takes_request = len(inspect.signature(self.state_reader).parameters) >= 3
+        except (TypeError, ValueError):
+            takes_request = False
+        out = self.state_reader(self.um, sid, request) if takes_request else self.state_reader(self.um, sid)
         state, record = dict(out["state"]), out.get("record")
         allowed = set(U.STATES) | {"model_version", "decision_context"}
         bad = [k for k, v in state.items() if k not in allowed or not isinstance(v, (str, int, float, bool, type(None)))]
@@ -125,7 +153,13 @@ class Runtime:
         state = {"model_version": state.get("model_version", U.MODEL_VERSION), **{s: state.get(s) for s in U.STATES},
                  **({"decision_context": state["decision_context"]} if "decision_context" in state else {})}
         json.dumps(record)        # 기록에 남길 수 있어야 한다
-        return state, {"kind": "state_reader", **(record or {})}
+        supplied = out.get("queries")
+        if supplied is not None:
+            _check_supplied(supplied, [q["name"] if isinstance(q, dict) else q.name for q in (request or {}).get("queries", ())])
+        src = {"kind": "state_reader", **(record or {})}
+        if supplied is not None:
+            src["queries"] = sorted(supplied)
+        return state, src, supplied
 
     def feedback(self, run_id: str, user_correction: bool):
         """사람이 그 실행을 고쳤나. 그것도 텔레메트리다 -- correction_rate 상태가 여기서 나온다."""

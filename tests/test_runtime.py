@@ -447,6 +447,125 @@ class ProviderCannotChangeSemantics(unittest.TestCase):
 
 
 # -- 상태 읽기의 자리(state_reader) -- Decision Context 층을 꽂는 곳. MS 는 그 패키지를 import 하지 않는다 ---------------
+def _prompts(out):
+    return " ".join(c["prompt_text"] for c in out["result"]["calls"] if c.get("prompt_text")) or json.dumps(out["result"], ensure_ascii=False)
+
+
+class QueryThroughDecisionContext(unittest.TestCase):
+    """PC-23 MS 쪽 · BD-65: CR 은 결정 문맥이 돌린 질의 결과를 받고, 낡은 값은 allow_stale 을 명시하지 않으면 LLM 에 안 간다."""
+
+    def _ctx_text(self, queries, supplied=None):
+        from ms.cr import ContextRuntime
+        spec, m, reg, *_ = world()
+        plan = ContextRuntime.plan({k: None for k in U.STATES}, FixedContext(), FixedPrompt())
+        return ContextRuntime.from_plan(reg, plan).minimal_context(m, "t", queries, supplied=supplied).render()
+
+    def test_stale_value_is_withheld_unless_allow_stale(self):
+        spec, *_ = world()
+        fleet = next(q for q in spec["queries"] if q["name"] == "fleet")
+        hidden = json.loads(self._ctx_text([fleet]))
+        row = next(r for r in hidden["state"] if r["id"] == "srv04")       # srv04.temp_c 는 낡았다(ts 900, ttl 60)
+        self.assertIsNone(row["temp_c"])
+        self.assertEqual(row["_unusable"], ["temp_c", "status"])
+        self.assertNotIn("_stale", row)
+        shown = json.loads(self._ctx_text([dict(fleet, allow_stale=True)]))
+        row = next(r for r in shown["state"] if r["id"] == "srv04")
+        self.assertEqual(row["temp_c"], 66.0)                                 # 명시하면 값과 _stale 표시
+        self.assertEqual(row["_stale"], ["temp_c", "status"])
+        fresh = next(r for r in hidden["state"] if r["id"] == "srv03")       # 대조: 낡지 않은 값은 그대로
+        self.assertEqual(fresh["temp_c"], 84.0)
+
+    def _supplied(self, rows_value=61.0):
+        return {"fleet": {"rows": [{"id": "srv07", "model": "Server", "props": {"temp_c": [rows_value, "OBSERVED"],
+                                                                                "status": [None, "STALE"]},
+                                    "must": False, "edges": []}], "matched": 1, "priority": 1, "droppable": []}}
+
+    def test_runtime_uses_reader_results_not_the_graph(self):
+        from unittest import mock
+        spec, m, reg, *_ = world()
+        fleet = next(q for q in spec["queries"] if q["name"] == "fleet")
+        calls = []
+
+        def reader(um, sid, request):
+            calls.append([q["name"] for q in request["queries"]])
+            return {"state": U.snapshot(um, sid), "record": {"id": "dc-q"}, "queries": self._supplied(12.5)}
+        rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")}, state_reader=reader)
+        rt.open_session("s", {"token_budget": 1000})
+        with mock.patch("ms.cr.run_query", side_effect=AssertionError("CR 이 그래프에 직접 물었다")):
+            out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": [fleet]})
+        self.assertEqual(calls, [["fleet"]])                                  # 요청의 질의가 리더에 넘어갔다
+        self.assertEqual(out["decision"]["state_source"]["queries"], ["fleet"])
+        ctx = out["result"]["rounds"][0]["context"]
+        self.assertEqual((ctx["matched"], ctx["keep"]), (1, 1))                    # DC 가 준 행 하나뿐(그래프에는 열둘)
+
+    def test_reader_results_render_unusable_as_unknown(self):
+        spec, *_ = world()
+        fleet = next(q for q in spec["queries"] if q["name"] == "fleet")
+        txt = json.loads(self._ctx_text([fleet], supplied=self._supplied(12.5)))
+        row = txt["state"][0]
+        self.assertEqual((row["id"], row["temp_c"], row["status"], row["_unusable"]), ("srv07", 12.5, None, ["status"]))
+
+    def test_retrieval_stays_inside_the_decision_context(self):
+        from unittest import mock
+        from ms.cr import ContextRuntime
+        spec, m, reg, *_ = world()
+        fleet = next(q for q in spec["queries"] if q["name"] == "fleet")
+        sup = self._supplied(12.5)
+        plan = ContextRuntime.plan({k: None for k in U.STATES}, FixedContext(), FixedPrompt())
+        cr = ContextRuntime.from_plan(reg, plan)
+        with mock.patch("ms.cr.run_query", side_effect=AssertionError("CR 이 그래프에 직접 물었다")):
+            ctx = cr.minimal_context(m, "t", [fleet], retrieved_ids=["srv07", "srv01"], supplied=sup)
+        got = [r for r in json.loads(ctx.render())["state"] if r.get("_q") == "retrieved"]
+        self.assertEqual([r["id"] for r in got], ["srv07"])                   # 결정 문맥 밖의 srv01 은 꺼내지 않는다
+        self.assertEqual(got[0]["temp_c"], 12.5)                              # 그래프의 61.0 이 아니라 DC 가 준 값
+
+    def test_two_argument_readers_still_work(self):
+        spec, m, reg, *_ = world()
+        rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")},
+                     state_reader=lambda um, sid: {"state": U.snapshot(um, sid), "record": None})
+        rt.open_session("s", {"token_budget": 1000})
+        out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        self.assertNotIn("queries", out["decision"]["state_source"])
+
+    def test_malformed_results_are_refused(self):
+        spec, m, reg, *_ = world()
+        fleet = next(q for q in spec["queries"] if q["name"] == "fleet")
+        bad = [{"other": self._supplied()["fleet"]},                                        # 다른 질의
+               {"fleet": dict(self._supplied()["fleet"], rows=[{"id": "srv07", "props": {"temp_c": [object(), "OBSERVED"]}}])},
+               {"fleet": dict(self._supplied()["fleet"], rows=[{"id": "srv07", "props": {"temp_c": 1.0}}])},
+               {"fleet": {"rows": []}}]                                                     # matched 없음
+        for b in bad:
+            rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")},
+                         state_reader=lambda um, sid, req, b=b: {"state": U.snapshot(um, sid), "record": None, "queries": b})
+            rt.open_session("s", {"token_budget": 1000})
+            with self.assertRaises(ValueError):
+                rt.handle({"session": "s", "task": "x", "queries": [fleet]})
+
+    def test_with_real_dc(self):
+        """진짜 DC(MS_DC_PATH)로: 질의 결과가 DC 를 거쳐 오고, 낡은 srv04 는 값이 없다."""
+        dc = os.environ.get("MS_DC_PATH", os.path.join(ROOT, "..", "DC"))
+        if not os.path.isdir(os.path.join(dc, "dc")):
+            self.skipTest("옆에 DC 가 없다(MS_DC_PATH)")
+        from ms.eval import dc_state_reader
+        from unittest import mock
+        Reader, info = dc_state_reader()
+        spec, m, reg, *_ = world()
+        rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")}, usage_manager=None)
+        reader = Reader(rt.um, m)
+        rt.state_reader = reader
+        rt.open_session("s", {"token_budget": 1000})
+        with mock.patch("ms.cr.run_query", side_effect=AssertionError("CR 이 그래프에 직접 물었다")):
+            out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        src = out["decision"]["state_source"]
+        self.assertEqual(src["queries"], sorted(q["name"] for q in spec["queries"]))
+        self.assertEqual(src["id"], reader.last.id)
+        rows = {r["id"]: r for r in reader.last.rows("fleet")}
+        self.assertIsNone(rows["srv04"]["temp_c"])                             # DC 가 낡은 값을 막았다
+        self.assertEqual(rows["srv03"]["temp_c"], 84.0)
+        with self.assertRaises(ValueError):                                     # DC 요청 질의는 아직 allow_stale 을 못 받는다
+            reader(rt.um, "session:s", {"queries": [dict(spec["queries"][1], allow_stale=True)]})
+
+
 class StateReaderSeam(unittest.TestCase):
     def _rt(self, reader=None):
         spec, m, reg, *_ = world()
@@ -724,9 +843,9 @@ class ContextRuntimeBoundary(unittest.TestCase):
         out = None
         for _ in range(3):
             out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
-        self.assertEqual(out["decision"]["cr"], "cr-1")
+        self.assertEqual(out["decision"]["cr"], "cr-2")
         for c in out["result"]["calls"]:
-            self.assertEqual(c["cd"]["cr"], "cr-1")
+            self.assertEqual(c["cd"]["cr"], "cr-2")
             self.assertEqual(len(c["cd"]["prefix_hash"]), 12)
             self.assertIn("stats", c["cd"])
         self.assertTrue(replay(out["decision"])["ok"])
