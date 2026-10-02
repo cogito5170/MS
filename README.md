@@ -42,6 +42,7 @@ USER
 MS API                 runtime.Runtime.handle            요청 하나 = 정책 루프 한 번
  ↓
 Request Manager        runtime.Runtime                   세션 상태를 읽고 정책 셋을 고르고, 실행을 RunRecord 로 적는다
+                       (state_reader)                    상태 읽기의 이음매 -- 기본 usage_model.snapshot, cogito5170/DC 의 MSStateReader 를 꽂을 수 있다
  ↓
 State Query            query.run_query · tool_query      그래프에서 LLM 쪽으로 나가는 유일한 길
  ↓
@@ -209,7 +210,7 @@ python3 -m ms ask ms/examples/datacenter.json --telemetry ms/examples/datacenter
 python3 -m ms ask ... --provider claude --model claude-opus-5-5 --stream     # ANTHROPIC_API_KEY
 python3 -m ms ask ... --provider openai --model <모형>                        # OPENAI_API_KEY (모형 기본값을 지어내지 않는다)
 python3 -m ms ask ... --provider sim-gemini                                   # 모의 -- 배선 확인
-python3 -m unittest tests.test_ms tests.test_runtime                          # 102 개
+python3 -m unittest tests.test_ms tests.test_runtime                          # 105 개
 ```
 
 ```python
