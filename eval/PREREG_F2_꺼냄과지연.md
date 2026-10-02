@@ -107,6 +107,36 @@ baseline **BD-49** 가 F2 를 ④(CR v2)의 첫 사전등록 대상으로 정했
 
 ---
 
+## 고침 1 (2026-10-02, 짓는 중 · 돌리기 전) -- 가설 · 수 · 읽기는 그대로다
+
+**S5 의 예상이 틀렸다.** "DC 를 거친 상태가 snapshot 과 같을 것이다" 라고 적었는데, 모의로 돌리자 다른 실행이 나왔다. 재서 가렸다:
+다른 상태는 **늘 `tool_churn` 하나**였고(DC 에서 None, snapshot 에서 LOW), 까닭은 낡음이 아니라 **투영**이다 -- DC 의 목적
+`context_runtime`(purpose-cr-1)은 CR 선택기가 읽는 일곱 상태만 담고 `tool_churn` 을 뺀다. MS 의 어느 선택기도 `tool_churn` 을
+읽지 않는다(코드 검색). 그래서 S5 를 이렇게 바꾼다:
+
+- 실행마다 DC 상태와 snapshot 이 **다른 상태 이름**을 적는다(`dc_diff`)
+- 다른 것이 `tool_churn` 뿐이면 "DC 길은 결과를 바꾼 원인이 아니다" 로 읽는다. 다른 상태가 하나라도 끼면 그 실행들을 따로 보고한다
+- 시험이 붙든다: 모의에서 D · G 의 계획 · 성공이 DC 를 꽂든 안 꽂든 같다(`Harness.test_dc_state_reader`)
+
+**모의에서 본 동작점 경고(S4)**: 모의 provider 로는 D · G 가 한 번도 압력 HIGH 로 돌지 않았다 -- 모의 에이전트가 자주 실패해
+correction_rate 가 HIGH 가 되고 품질 우선(고정과 같음)으로 돈다. 진짜 모형은 덜 실패하니 다를 것이다(판본 1 의 claude-cli 실행에서는
+D 가 압력 HIGH 로 돈 실행이 있었다). S4 의 규칙(절반 밑이면 Q2 에 답하지 않는다)을 그대로 지킨다.
+
+**지은 것**(`ms/policy.py` `AdaptiveContext2` · `ms/eval.py` 칸 G · `dc_state_reader` · S1 `_loto` · S4 `pressure_high` · S5 `dc_diff` ·
+`ms eval --state-reader dc --prereg …`). 시험 153 개 통과, 변이 8 개 전부 잡힘.
+
+**돌릴 명령**(DC 통합 브랜치를 `MS_DC_PATH` 에):
+
+    MS_DC_PATH=../DC python3 -m ms eval --tasks eval/tasks/datacenter.json --claude claude-cli --configs B,D,G --reps 3 \
+        --order interleaved --seed 0 --fresh --state-reader dc --prereg eval/PREREG_F2_꺼냄과지연.md \
+        --out eval/results/claude-cli_F2_<날짜>
+
+**비용 추정**(판본 1 재측정3 의 claude-cli 실행에서): 실행당 provider 보고 비용 평균 $0.015(최대 $0.023) · 벽시계 평균 7.2 s.
+B · D · G × 7 × 3 = 63 실행 + 고침 재시도(재측정3 에서 실행의 약 12%) ≈ 70 실행 → **약 $1.0~1.6 · 9~12 분**. claude-cli 는 구독으로
+청구된다(보고 비용은 API 환산값이다). **돌리기 전에 baseline 이슈에서 사용자 결정을 받는다.**
+
+---
+
 ## 결과 (돌린 뒤 덧붙임)
 
 (아직 돌리지 않았다)

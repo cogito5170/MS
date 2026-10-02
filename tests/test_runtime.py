@@ -954,6 +954,46 @@ class SuccessIsJudgedOutside(unittest.TestCase):
         self.assertTrue(judge(m, {"expect_noop": True}, []))
 
 
+class LessCuttingContext(unittest.TestCase):
+    """ctx-adaptive-2 (PREREG_F2): ctx-adaptive-1 과 규칙이 같고 압력 HIGH 에서 DROP · DEFER 만 하지 않는다."""
+
+    def _states(self):
+        base = {s: None for s in U.STATES}
+        yield dict(base, token_budget_pressure="HIGH")
+        yield dict(base, context_pressure="HIGH", task_complexity="HIGH")
+        yield dict(base, token_budget_pressure="MEDIUM")
+        yield dict(base, token_budget_pressure="LOW")
+        yield dict(base, token_budget_pressure="HIGH", answer_reliability="LOW")
+        yield base
+
+    def test_differs_from_v1_only_in_drop_and_defer_under_high(self):
+        from ms.policy import AdaptiveContext2
+        b = {"budget_chars": 1500}
+        for st in self._states():
+            p1, p2 = AdaptiveContext().plan(st, b)["params"], AdaptiveContext2().plan(st, b)["params"]
+            high = max(st.get("token_budget_pressure") == "HIGH", st.get("context_pressure") == "HIGH") \
+                and st.get("answer_reliability") != "LOW"
+            self.assertFalse(p2["drop"])
+            self.assertIsNone(p2["defer_priority_min"])
+            self.assertEqual({k: v for k, v in p1.items() if k not in ("drop", "defer_priority_min")},
+                             {k: v for k, v in p2.items() if k not in ("drop", "defer_priority_min")}, st)
+            if high and st.get("task_complexity") != "HIGH":
+                self.assertTrue(p1["drop"])                                   # 대조: v1 은 여기서 잘랐다
+            else:
+                self.assertEqual(p1, p2, st)
+
+    def test_replay_knows_v2(self):
+        spec, m, reg, *_ = world()
+        from ms.policy import AdaptiveContext2
+        rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")}, context_selector=AdaptiveContext2(),
+                     base_context={"budget_chars": 1500})
+        rt.open_session("s", {"token_budget": 300, "context_budget": 200})
+        for _ in range(2):
+            dec = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})["decision"]
+        self.assertEqual(dec["context_policy"]["version"], "ctx-adaptive-2")
+        self.assertTrue(replay(json.loads(json.dumps(dec)))["ok"])
+
+
 def spec_of(tf):
     return json.load(open(os.path.join(ROOT, tf["world"]["spec"]), encoding="utf-8"))
 
@@ -997,6 +1037,70 @@ class Harness(unittest.TestCase):
             judged += 1 + (row["success_after_correction"] is not None)
         sid = U.session_id(lane.sess)
         self.assertEqual(len(lane.usage.measurements[sid]["task_success"]), judged)
+
+    def test_f2_configs_and_trivial_explanations(self):
+        """PREREG_F2: B · D · G 를 돌리면 D->G · B->G 짝 · 과업 빼기(S1) · 동작점(S4)이 보고에 나온다."""
+        from ms.eval import evaluate, report_md
+        rep = evaluate(os.path.join(ROOT, "eval", "tasks", "datacenter.json"), {"claude": "sim-claude"}, ("B", "D", "G"),
+                       reps=1, log=lambda *a: None, prereg="eval/PREREG_F2_꺼냄과지연.md")
+        pairs = {c["pair"]: c for c in rep["comparisons"]}
+        self.assertEqual(set(pairs), {"B->D", "D->G", "B->G"})
+        lo = pairs["D->G"]["leave_one_task_out"]["retrievals"]
+        self.assertEqual(len(lo["per_task"]), 7)
+        self.assertEqual(len(lo["without"]), 7)
+        self.assertIn("retrievals", pairs["B->D"]["metrics"])
+        self.assertEqual(rep["prereg"], "eval/PREREG_F2_꺼냄과지연.md")
+        g = [r for r in rep["rows"] if r["config"] == "G"]
+        self.assertTrue(g and all(r["pressure_high"] in (True, False) for r in g))
+        md = report_md(rep)
+        self.assertIn("S1 retrievals", md)
+        self.assertIn("압력 HIGH 계획으로 돈 실행", md)
+
+    def test_operating_point_under_high_pressure(self):
+        """S4 가 실제로 세는지: 예산을 아주 작게 해 압력 HIGH 로 만든다. G 는 v2 로 돌고 DROP · DEFER 를 안 한다."""
+        from ms.eval import Lane
+        tf = json.load(open(os.path.join(ROOT, "eval", "tasks", "datacenter.json"), encoding="utf-8"))
+        tf["budgets"] = {"token_budget": 10, "context_budget": 10, "latency_budget_ms": 1e9}
+        rows = {}
+        for c in ("B", "D", "G"):
+            lane = Lane(c, 0, {"claude": "sim-claude"}, tf)
+            rows[c] = [lane.run_task(t, log=lambda *a: None) for t in tf["tasks"][:2]]
+        self.assertEqual({r["context_version"] for r in rows["B"]}, {"ctx-fixed-1"})
+        self.assertEqual({r["context_version"] for r in rows["D"]}, {"ctx-adaptive-1"})
+        self.assertEqual({r["context_version"] for r in rows["G"]}, {"ctx-adaptive-2"})
+        self.assertFalse(any(r["pressure_high"] for r in rows["B"]))
+        self.assertTrue(rows["D"][1]["pressure_high"] and rows["G"][1]["pressure_high"])      # 첫 실행 뒤 압력이 섰다
+        self.assertIn("DROP · DEFER 안 함", " ".join(rows["G"][1]["context_plan"]))
+        self.assertIn("DROP", " ".join(rows["D"][1]["context_plan"]))
+
+    def test_loto_finds_a_one_task_effect(self):
+        """S1 의 검사 자체가 도는지: 차가 한 과업에만 있으면 그 과업을 뺄 때 부호가 바뀐다고 말해야 한다."""
+        from ms.eval import _loto
+        a = [{"task": t, "retrievals": 0} for t in ("t1", "t2", "t3")]
+        b = [{"task": "t1", "retrievals": 2}, {"task": "t2", "retrievals": 0}, {"task": "t3", "retrievals": 0}]
+        self.assertEqual(_loto(a, b, "retrievals")["sign_changes_when_dropped"], ["t1"])
+        b2 = [{"task": t, "retrievals": 1} for t in ("t1", "t2", "t3")]
+        self.assertEqual(_loto(a, b2, "retrievals")["sign_changes_when_dropped"], [])
+
+    def test_dc_state_reader(self):
+        """BD-49: 상태를 DC 결정 문맥으로 읽는다. 평가의 시계가 멈춰 있어 snapshot 과 같아야 한다(S5)."""
+        dc = os.environ.get("MS_DC_PATH", os.path.join(ROOT, "..", "DC"))
+        if not os.path.isdir(os.path.join(dc, "dc")):
+            self.skipTest("옆에 DC 가 없다(MS_DC_PATH)")
+        from ms.eval import evaluate
+        rep = evaluate(os.path.join(ROOT, "eval", "tasks", "datacenter.json"), {"claude": "sim-claude"}, ("D", "G"),
+                       reps=1, log=lambda *a: None, state_reader="dc")
+        self.assertEqual(rep["state_reader"]["kind"], "dc")
+        self.assertTrue(all(r["state_source"] == "state_reader" for r in rep["rows"]))
+        # DC 목적 purpose-cr-1 은 CR 선택기가 읽는 일곱 상태만 투영한다 -- 다른 것은 tool_churn 뿐이어야 한다
+        self.assertEqual({k for r in rep["rows"] for k in r["dc_diff"]}, {"tool_churn"})
+        self.assertTrue(any(r["state_known"] for r in rep["rows"]))           # 대조: 모르는 상태끼리 같은 것이 아니다
+        # 그래서 계획은 DC 를 꽂든 안 꽂든 같다(S5 의 본뜻: DC 길이 결과를 바꾼 원인이 아니다)
+        plain = evaluate(os.path.join(ROOT, "eval", "tasks", "datacenter.json"), {"claude": "sim-claude"}, ("D", "G"),
+                         reps=1, log=lambda *a: None)
+        key = lambda r: (r["config"], r["task"])
+        plans = lambda rows: {key(r): (r["context_plan"], r["prompt_plan"], r["success"]) for r in rows}
+        self.assertEqual(plans(rep["rows"]), plans(plain["rows"]))
 
     def test_interleaved_order(self):
         from ms.eval import evaluate

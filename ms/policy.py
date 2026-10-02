@@ -53,6 +53,7 @@ class AdaptiveContext:
         3. task_complexity=HIGH 면 DROP · DEFER 를 끄고 예산을 ×0.75 밑으로 안 내린다
     """
     version = "ctx-adaptive-1"
+    high_cuts = True          # 압력 HIGH 에서 DROP · DEFER 까지 하나
 
     def plan(self, state: dict, base: dict) -> dict:
         p = dict(BASE_CONTEXT, **base)
@@ -62,9 +63,12 @@ class AdaptiveContext:
             return {"version": self.version, "params": p, "reasons": ["품질 우선: " + ", ".join(q) + " -> 줄이지 않는다"]}
         reasons = []
         pressure = max(_lv(state, "token_budget_pressure"), _lv(state, "context_pressure"))
-        if pressure == 2:
+        if pressure == 2 and self.high_cuts:
             p.update(budget_chars=int(b0 * 0.5), compress=True, drop=True, defer_priority_min=2)
             reasons.append("압력 HIGH -> 예산 ×0.5 · COMPRESS · DROP · DEFER(우선순위>=2)")
+        elif pressure == 2:
+            p.update(budget_chars=int(b0 * 0.5), compress=True)
+            reasons.append("압력 HIGH -> 예산 ×0.5 · COMPRESS (DROP · DEFER 안 함)")
         elif pressure == 1:
             p.update(budget_chars=int(b0 * 0.75), compress=True)
             reasons.append("압력 MEDIUM -> 예산 ×0.75 · COMPRESS")
@@ -150,7 +154,14 @@ class ExplicitProvider(ProviderPolicy):
                 "reason": "요청이 명시" if request.get("provider") else "기본값", "requested": request.get("provider")}
 
 
-CONTEXT_SELECTORS = {c.version: c for c in (FixedContext(), AdaptiveContext())}
+class AdaptiveContext2(AdaptiveContext):
+    """ctx-adaptive-2 (사전등록 eval/PREREG_F2_꺼냄과지연.md 에서 정의를 고정): ctx-adaptive-1 과 모든 규칙이 같고, 압력 HIGH 에서
+    DROP · DEFER 를 하지 않는다(예산 ×0.5 · COMPRESS 만). 덜 자르면 꺼냄과 지연이 주는가를 재려는 칸이다."""
+    version = "ctx-adaptive-2"
+    high_cuts = False
+
+
+CONTEXT_SELECTORS = {c.version: c for c in (FixedContext(), AdaptiveContext(), AdaptiveContext2())}
 PROMPT_SELECTORS = {c.version: c for c in (FixedPrompt(), AdaptivePrompt())}
 
 
