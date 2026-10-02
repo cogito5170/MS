@@ -38,7 +38,7 @@ from . import usage_model as U
 from .arbiter import DENY, Arbiter
 from .cr import VERSION as CR_VERSION, ContextRuntime
 from .pipeline import Pipeline
-from . import intent, l0
+from . import guard_shadow, intent, l0
 from .decision_record import DecisionRecord
 from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt, default_context_plan, undecided
 from .run_telemetry import RunRecord, cost_of
@@ -82,6 +82,7 @@ class Runtime:
         self.template_version = TEMPLATE_VERSIONS[self.prompt_layout]
         U.install(self.um)
         self.arbiter = Arbiter(registry, grants, clock=self.clock)
+        self.guard = guard_shadow.Shadow(registry, grants) if guard_shadow.available() else None   # shadow(CMD-M17)
         self.ctx_sel = context_selector or FixedContext()
         self.prompt_sel = prompt_selector or FixedPrompt()
         default = next(iter(self.providers)) if self.providers else None
@@ -91,6 +92,7 @@ class Runtime:
         self.records: dict = {}
         self.decisions: dict = {}
         self.intents: dict = {}         # 결정 id -> ActionIntent 기록(shadow, CMD-M15). 결정 기록 밖에 둔다
+        self.guards: dict = {}          # 결정 id -> GuardResult 기록(shadow, CMD-M17). 결정 기록 밖에 둔다
         self.state_reader = state_reader
         self.l0_ledger, self.l0_sink = l0_ledger, l0_sink      # L0 Telemetry(선택 의존). 둘 다 없으면 안 낸다
         if (l0_ledger or l0_sink) and not l0.available():
@@ -106,6 +108,7 @@ class Runtime:
         if sid not in self.um.graph.nodes:
             raise KeyError(f"세션 {request['session']} 이 열리지 않았다(open_session)")
         state, source, supplied = self._read_state(sid, request)
+        mat = guard_shadow.material(self.state_reader) if self.guard and intent.dc_id(source) else None   # 읽은 직후
         plan = ContextRuntime.plan(state, self.ctx_sel, self.prompt_sel, self.base_context, self.prompt_layout)
         action = source.get("default_action")
         if action is not None and undecided(self.ctx_sel, state):
@@ -119,12 +122,22 @@ class Runtime:
         l0rec = l0.recorder(run_id, self.l0_ledger, self.l0_sink)
         l0rec.run_start(model=choice.get("model"), provider=choice["provider"])
         pre = []                  # 도구를 실행하면 결정 기록은 그 직전에 지어진다(PC-19 G1 -- ActionCommand.decision_ref 의 자리)
+        guards = []
+
+        def shadow(rnd, p, ctx, d):
+            """Arbiter 판정 직후, 같은 지금 상태로 Guard 를 부른다. 기록만 한다 -- 실행은 Arbiter 가 정한다."""
+            it = intent.intent_of(source, p.to_dict())
+            if it is None or isinstance(it, list):
+                return
+            guards.append({"round": rnd, "intent_id": it.id, "arbiter": [d.verdict, d.rule],
+                           "guard": self.guard.check(it, mat, ctx, self.m)})
         pipe = Pipeline(self.m, self.reg, provider, None, self.arbiter,
                         model=choice.get("model"), stream=bool(request.get("stream")),
                         tool_mode=request.get("tool_mode", "text"), preamble=request.get("preamble", ""),
                         cr=ContextRuntime.from_plan(self.reg, plan), recorder=l0rec,
                         provider_label=choice["provider"],
-                        before_execute=lambda r: pre.append(self._decision(state, cplan, pplan, choice, r, source)))
+                        before_execute=lambda r: pre.append(self._decision(state, cplan, pplan, choice, r, source)),
+                        after_decide=shadow if self.guard and intent.dc_id(source) else None)
         res = pipe.run(request["task"], request.get("queries", ()), max_rounds=request.get("max_rounds", self.max_rounds),
                        supplied=supplied)
         total_ms = (self.wall() - t0) * 1000
@@ -146,9 +159,13 @@ class Runtime:
             self.intents[dec.id] = intents
         for it in intents:
             self._ledger({"kind": "intent", "decision_ref": dec.id, **it})
+        if guards:
+            self.guards[dec.id] = guards
+        for g in guards:
+            self._ledger({"kind": "guard", "decision_ref": dec.id, **g})
         self._ledger({"kind": "run", "record": rec.to_dict()})
         return {"run_id": rec.run["run_id"], "record": rec.to_dict(), "decision": dec.to_dict(), "result": res.to_dict(),
-                "intents": intents}
+                "intents": intents, "guards": guards}
 
     def _read_state(self, sid: str, request: "dict | None" = None):
         """정책 · CR 이 볼 상태와 그 출처(, 결정 문맥이 돌린 질의 결과). 꽂은 읽기가 무엇을 주든 사용 상태 이름과 스칼라 값만,

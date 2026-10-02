@@ -171,6 +171,19 @@ provider 계획 · 중재 결정 · 재현 입력은 `DecisionRecord` 에 있고
 - A8 되풀이 열쇠는 `Proposal.key()` 그대로다. intent_id 를 열쇠로 쓰면 까닭만 바꾼 되풀이를 놓친다.
 - 시험은 action 이 옆(`MS_ACTION_PATH`, 기본 `../action`)에 있을 때만 돈다.
 
+**Guard 를 Arbiter 옆에서 shadow 로 부른다 (`ms/guard_shadow.py`, 선택 의존 · CMD-M17 · guard F4).** [cogito5170/guard](https://github.com/cogito5170/guard)
+(`guard-result/1`)가 import 되고 의도가 있을 때(DC 배선)만 돈다.
+- 판마다 Arbiter 판정 **직후**(실행 전), 같은 지금 상태로 `guard.evaluate` 를 부른다.
+- 입력은 셋이다.
+  - DCView: DC 문맥 `to_dict()` · 목적 명세를 `dcview_from_dc` 에 넘긴다. 둘 다 상태를 읽은 직후에 붙잡는다. 그 판의 CR 맥락이 내놓은 것(offers)과 본 것(seen)도 함께 넘긴다.
+  - StateView: State Manager 의 지금 상태다.
+  - GuardModel: ToolSpec 과 grants 다.
+- A8 기억은 Runtime 이 든다.
+- **실행은 Arbiter 가 정한다.** Guard 결과는 원장 `{"kind": "guard", "decision_ref", "round", "intent_id", "arbiter", "guard"}` 줄과
+  `handle()` 의 `guards` 에만 남는다. 결정 기록에는 넣지 않으므로 결정 id 가 그대로다.
+- 어댑터 · 재료 오류는 DENY(E) 로 남긴다.
+- 대조표: `python3 eval/guard_contrast.py`. 시험은 `MS_GUARD_PATH`(기본 `../guard`)에 guard 가 있을 때만 돈다.
+
 ## State — 사용의 모형 (`usage_model.py`)
 
 세션 하나의 원 측정은 전부 측정 창(`measurement`)이고, 그래프에는 여덟 상태만 산다. **문턱은 잰 것이 아니라 손으로 둔 것이다** (`MODEL_VERSION`).

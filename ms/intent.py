@@ -52,23 +52,26 @@ def dc_id(state_source: "dict | None") -> "str | None":
     return i if s.get("kind") == "state_reader" and isinstance(i, str) and i else None
 
 
-def intents(state_source: "dict | None", rounds: list) -> list:
+def intent_of(state_source: "dict | None", proposal: "dict | None"):
+    """제안 하나(Proposal.to_dict()) -> ActionIntent 객체 · 계약 오류 목록(list) · None(의도가 아님 · 낼 수 없음)."""
     a, did = _action(), dc_id(state_source)
-    if a is None or did is None:
-        return []
-    out = []
-
-    def put(rnd, **kw):
-        try:
-            out.append({"round": rnd, "intent": a.ActionIntent(dc_id=did, policy=POLICY, **kw).to_dict()})
-        except a.ContractError as e:          # shadow 다 -- 꼴이 안 맞아도 실행은 그대로 두고, 까닭만 남긴다
-            out.append({"round": rnd, "contract_error": list(e.errors)})
-
+    p = proposal
+    if a is None or did is None or not p or p.get("error") or p.get("tool") in (None, NONE, RETRIEVE):
+        return None
     shown = [QUERY_KEY + q for q in (state_source or {}).get("queries", ())]
+    try:
+        return a.ActionIntent(dc_id=did, policy=POLICY, action=p["tool"], target=p["target"], args=p["args"],
+                              rationale=p["rationale"], used_keys=shown, author_kind="llm")
+    except a.ContractError as e:              # shadow 다 -- 꼴이 안 맞아도 실행은 그대로 두고, 까닭만 남긴다
+        return list(e.errors)
+
+
+def intents(state_source: "dict | None", rounds: list) -> list:
+    out = []
     for r in rounds:
-        p = r.get("proposal")
-        if not p or p.get("error") or p.get("tool") in (None, NONE, RETRIEVE):
-            continue
-        put(r["round"], action=p["tool"], target=p["target"], args=p["args"], rationale=p["rationale"],
-            used_keys=shown, author_kind="llm")
+        it = intent_of(state_source, r.get("proposal"))
+        if isinstance(it, list):
+            out.append({"round": r["round"], "contract_error": it})
+        elif it is not None:
+            out.append({"round": r["round"], "intent": it.to_dict()})
     return out

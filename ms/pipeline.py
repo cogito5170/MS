@@ -57,11 +57,13 @@ class Pipeline:
                  arbiter: "Arbiter | None" = None, retrieve_max: int = 20, prompt_plan: "dict | None" = None,
                  model: "str | None" = None, stream: bool = False, tool_mode: str = "text",
                  prompt_layout: "str | None" = None, preamble: str = "", cr: "ContextRuntime | None" = None,
-                 recorder=None, provider_label: "str | None" = None, before_execute=None):
+                 recorder=None, provider_label: "str | None" = None, before_execute=None,
+                 after_decide=None):
         self.m, self.reg = manager, registry
         self.rec = recorder or NullRecorder()      # L0 Telemetry -- 무슨 일이 일어났나만(ms/l0.py)
         self.provider_label = provider_label       # L0 에 적을 provider 이름(런타임이 고른 이름 -- 모의면 sim-*)
         self.before_execute = before_execute       # 도구 실행 직전에 RunResult 로 불린다 -- 결정 기록을 실행 전에 짓는 자리(PC-19 G1)
+        self.after_decide = after_decide           # 판마다 Arbiter 판정 직후(실행 전)에 (판, 제안, 맥락, 판정) -- Guard shadow 의 자리(CMD-M17)
         self.provider = llm if isinstance(llm, LLMProvider) else CallableProvider(llm)
         self.llm = llm
         self.cr = cr or ContextRuntime(registry, policy, prompt_plan, prompt_layout, retrieve_max)
@@ -115,6 +117,8 @@ class Pipeline:
             p = proposal_from(resp)
             d = self.arbiter.decide(p, ctx, self.m)
             rnd["proposal"], rnd["decision"] = p.to_dict(), d.to_dict()
+            if self.after_decide is not None:
+                self.after_decide(i + 1, p, ctx, d)
             if d.verdict == NOOP:
                 res.outcome = "noop"
                 return res

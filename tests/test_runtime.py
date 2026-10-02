@@ -1665,5 +1665,115 @@ class DecisionBeforeExecution(unittest.TestCase):
         self.assertEqual(out["record"]["decision_ref"], out["decision"]["id"])
 
 
+def guard_pkg():
+    """Guard(cogito5170/guard) -- 선택 의존. 경로는 MS_GUARD_PATH(기본 ../guard). action 도 있어야 한다."""
+    action_pkg()
+    path = os.environ.get("MS_GUARD_PATH", os.path.join(ROOT, "..", "guard"))
+    if os.path.isdir(os.path.join(path, "guard")) and path not in sys.path:
+        sys.path.insert(0, path)
+    from ms import guard_shadow
+    return guard_shadow._guard()
+
+
+class GuardShadowWiring(unittest.TestCase):
+    """CMD-M17: Arbiter 옆에서 Guard 를 shadow 로 부른다. 실행은 Arbiter 가 정하고, Guard 결과는 원장 줄로만 남는다."""
+
+    def setUp(self):
+        self.G = guard_pkg()
+        dc = os.environ.get("MS_DC_PATH", os.path.join(ROOT, "..", "DC"))
+        if self.G is None or not os.path.isdir(os.path.join(dc, "dc")):
+            self.skipTest("옆에 guard · action · DC 가 없다(MS_GUARD_PATH · MS_ACTION_PATH · MS_DC_PATH)")
+        from ms.eval import dc_state_reader
+        self.Reader = dc_state_reader()[0]
+
+    def _rt(self, llm=None, reader=True, **kw):
+        spec, m, reg, *_ = world()
+        rt = Runtime(m, reg, {"p": llm or make_provider("sim-claude")}, **kw)
+        if reader:
+            rt.state_reader = self.Reader(rt.um, m)
+        rt.open_session("s", {"token_budget": 1000})
+        return spec, rt
+
+    def test_each_intent_gets_a_guard_result_next_to_the_arbiter(self):
+        """끝난 기준 1: 의도마다 GuardResult(계약 꼴 왕복) · 같은 판의 Arbiter 판정과 나란히 · 원장 줄."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = os.path.join(tmp, "runs.jsonl")
+            spec, rt = self._rt(ledger_path=ledger)
+            out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+            with open(ledger, encoding="utf-8") as fh:
+                lines = [json.loads(l) for l in fh]
+        self.assertEqual(len(out["guards"]), len(out["intents"]))
+        g = out["guards"][0]
+        self.assertEqual(g["intent_id"], out["intents"][0]["intent"]["intent_id"])
+        self.assertEqual(self.G.GuardResult.from_dict(json.loads(json.dumps(g["guard"]))).to_dict(), g["guard"])
+        self.assertEqual((g["arbiter"], g["guard"]["verdict"], g["guard"]["rule"]), (["ALLOW", "0"], "ALLOW", "0"))
+        self.assertIn("srv07@5", g["guard"]["state_refs"])                    # 지금 상태를 보았다(판)
+        self.assertEqual([l["kind"] for l in lines], ["decision", "intent", "guard", "run"])
+        self.assertEqual(lines[2]["decision_ref"], out["decision"]["id"])
+        self.assertNotIn("guard", json.dumps(out["decision"]))                 # 결정 기록 밖 -- id 의 입력이 아니다
+
+    def test_guard_never_decides_execution(self):
+        """끝난 기준 3: Guard 가 SAFE_ACTION(D) 을 내도 Arbiter 의 ALLOW 대로 실행된다. Guard 가 없을 때와 결정 id · 결과가 같다."""
+        import itertools
+        from unittest import mock
+
+        def run():
+            # 텔레메트리 id 는 프로세스 전역 셈이고 DC provenance(따라서 결정 문맥 id)에 든다 -- 세계마다 처음부터 센다
+            with mock.patch("ms.telemetry._ids", itertools.count(1)):
+                spec, rt = self._rt(ScriptedLLM([{"tool": "reboot", "target": "srv07", "rationale": "x"}]),
+                                    grants=("reboot",))
+                return rt.handle({"session": "s", "task": "x", "queries": spec["queries"]})
+        on = run()
+        g = on["guards"][0]
+        self.assertEqual((g["arbiter"], g["guard"]["verdict"], g["guard"]["rule"]), (["ALLOW", "0"], "SAFE_ACTION", "D"))
+        self.assertEqual(on["result"]["outcome"], "executed")
+        self.assertEqual(run()["decision"]["id"], on["decision"]["id"])        # 대조: 같은 세계면 같은 id
+        with mock.patch.dict(sys.modules, {"guard": None}):
+            off = run()
+        self.assertEqual(off["guards"], [])
+        self.assertEqual(off["decision"]["id"], on["decision"]["id"])
+        same = lambda o: (o["result"]["outcome"], o["result"]["executed"], o["result"]["ingested"])
+        self.assertEqual(same(off), same(on))
+
+    def test_snapshot_path_calls_no_guard(self):
+        spec, rt = self._rt(reader=False)
+        out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        self.assertEqual((out["result"]["outcome"], out["guards"], rt.guards), ("executed", [], {}))
+
+    def test_adapter_errors_are_recorded_as_deny_E(self):
+        """고친 DC 기록 · 재료 없음은 DENY(E) 로 남고, 실행은 그대로다."""
+        from unittest import mock
+        from ms import guard_shadow
+
+        def tampered(reader):
+            rec, purpose = real(reader)
+            rec = dict(rec, core=dict(rec["core"], default_action=None))
+            return rec, purpose
+        real = guard_shadow.material
+        for fake, why in ((tampered, "digest"), (lambda reader: None, "재료가 없다")):
+            spec, rt = self._rt()
+            with mock.patch("ms.guard_shadow.material", fake):
+                out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+            g = out["guards"][0]["guard"]
+            self.assertEqual((g["verdict"], g["rule"]), ("DENY", "E"))
+            self.assertIn(why, g["reasons"][0])                                 # 왜 E 인지가 원장에 남는다
+            self.assertEqual(out["result"]["outcome"], "executed")
+
+    def test_guard_remembers_what_it_allowed(self):
+        """A8 의 기억은 Runtime 이 든다: 같은 지금 상태에서 같은 의도를 다시 보면 A8."""
+        spec, rt = self._rt()
+        again, real = [], rt.guard.check
+
+        def check(it, mat, ctx, m):
+            first = real(it, mat, ctx, m)
+            again.append(real(it, mat, ctx, m))
+            return first
+        rt.guard.check = check
+        out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        self.assertEqual(out["guards"][0]["guard"]["verdict"], "ALLOW")
+        self.assertEqual((again[0]["verdict"], again[0]["rule"]), ("DENY", "A8"))
+
+
 if __name__ == "__main__":
     unittest.main()
