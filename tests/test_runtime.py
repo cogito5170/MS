@@ -1234,14 +1234,17 @@ class F2bBundle(unittest.TestCase):
 
     def test_B_cannot_retrieve_and_G_H_hide_rows(self):
         from ms.cr import ContextRuntime
-        from ms.policy import AdaptiveContext2, AdaptiveContext2c
+        from ms.eval import CONTEXT, CONFIGS
         tf = self._tf()
-        high = dict({k: None for k in U.STATES}, token_budget_pressure="HIGH")
+        high = dict({k: None for k in U.STATES}, token_budget_pressure="HIGH", answer_reliability="HIGH", correction_rate="LOW")
+        sel = {c: CONTEXT[CONFIGS[c][1]]() for c in "BGH"}                       # 평가가 실제로 쓰는 판본(BD-88)
+        self.assertEqual({c: s.version for c, s in sel.items()},
+                         {"B": "ctx-fixed-1", "G": "ctx-adaptive-4", "H": "ctx-adaptive-4c"})
         for t in tf["tasks"]:
             spec, w, reg = self._world(tf, t)
-            for name, sel, st in (("B", FixedContext(), {k: None for k in U.STATES}), ("G", AdaptiveContext2(), high),
-                                  ("H", AdaptiveContext2c(), high)):
-                plan = ContextRuntime.plan(st, sel, FixedPrompt(), tf["base_context"])
+            for name, st in (("B", {k: None for k in U.STATES}), ("G", high), ("H", high)):
+                sel_ = sel[name]
+                plan = ContextRuntime.plan(st, sel_, FixedPrompt(), tf["base_context"])
                 p = json.loads(ContextRuntime.from_plan(reg, plan).minimal_context(w, t["task"], spec["queries"]).render())
                 tools = {x["name"] for x in p["tools"]}
                 if name == "B":
@@ -1267,12 +1270,12 @@ class F2bBundle(unittest.TestCase):
         self.assertEqual(cov[0]["matched"], res.matched)
 
     def test_H_equals_G_plan_and_default_when_undecided(self):
-        from ms.policy import AdaptiveContext2, AdaptiveContext2c, default_context_plan
+        from ms.policy import AdaptiveContext4, AdaptiveContext4c, default_context_plan
         base = dict(BASE_CONTEXT, budget_chars=4000, keep_max=40)
         unknown = {k: None for k in U.STATES}
-        self.assertEqual(AdaptiveContext2c().plan(unknown, base)["params"], default_context_plan("KEEP", base)["params"])
-        high = dict(unknown, token_budget_pressure="HIGH")
-        g, h = AdaptiveContext2().plan(high, base)["params"], AdaptiveContext2c().plan(high, base)["params"]
+        self.assertEqual(AdaptiveContext4c().plan(unknown, base)["params"], default_context_plan("KEEP", base)["params"])
+        high = dict(unknown, token_budget_pressure="HIGH", answer_reliability="HIGH", correction_rate="LOW")
+        g, h = AdaptiveContext4().plan(high, base)["params"], AdaptiveContext4c().plan(high, base)["params"]
         self.assertEqual(dict(h), dict(g, coverage=True))
 
     def test_stratified_judgement_on_synthetic_rows(self):
@@ -1309,6 +1312,8 @@ class F2bBundle(unittest.TestCase):
         self.assertEqual(rep["warmup_runs"], 9)
         self.assertEqual({c: s["runs"] for c, s in rep["summary"].items()}, {"B": 16, "G": 16, "H": 16})
         self.assertEqual(rep["versions"]["tasks"], "datacenter-tasks-3")
+        vers = {c: {r["context_version"] for r in rep["rows"] if r["config"] == c and not r["warmup"]} for c in "BGH"}
+        self.assertEqual(vers, {"B": {"ctx-fixed-1"}, "G": {"ctx-adaptive-4"}, "H": {"ctx-adaptive-4c"}})
         self.assertIn("R2", rep["stratified"])
         self.assertIn("F2b 층별 판정", report_md(rep))
 
@@ -1382,21 +1387,49 @@ class Harness(unittest.TestCase):
         self.assertIn("압력 HIGH 계획으로 돈 실행", md)
 
     def test_operating_point_under_high_pressure(self):
-        """S4 가 실제로 세는지: 예산을 아주 작게 해 압력 HIGH 로 만든다. G 는 v2 로 돌고 DROP · DEFER 를 안 한다."""
+        """S4 가 실제로 세는지 + BD-88: 예산을 아주 작게 해 압력 HIGH 로 만든다. 품질 상태를 모르는 실행은 KEEP(기본 결정),
+        품질을 알면 판본대로 줄인다. G 는 -4 로 돌고 DROP · DEFER 를 안 한다."""
         from ms.eval import Lane
         tf = json.load(open(os.path.join(ROOT, "eval", "tasks", "datacenter.json"), encoding="utf-8"))
         tf["budgets"] = {"token_budget": 10, "context_budget": 10, "latency_budget_ms": 1e9}
+        tf["tasks"] = [{k: v for k, v in t.items() if k != "correction"} for t in tf["tasks"]] * 2   # 고침 없음 -> correction LOW
         rows = {}
         for c in ("B", "D", "G"):
             lane = Lane(c, 0, {"claude": "sim-claude"}, tf)
-            rows[c] = [lane.run_task(t, log=lambda *a: None) for t in tf["tasks"][:2]]
+            rows[c] = [lane.run_task(t, log=lambda *a: None) for t in tf["tasks"]]
         self.assertEqual({r["context_version"] for r in rows["B"]}, {"ctx-fixed-1"})
-        self.assertEqual({r["context_version"] for r in rows["D"]}, {"ctx-adaptive-1"})
-        self.assertEqual({r["context_version"] for r in rows["G"]}, {"ctx-adaptive-2"})
+        self.assertEqual({r["context_version"] for r in rows["D"]}, {"ctx-adaptive-3"})
+        self.assertEqual({r["context_version"] for r in rows["G"]}, {"ctx-adaptive-4"})
         self.assertFalse(any(r["pressure_high"] for r in rows["B"]))
-        self.assertTrue(rows["D"][1]["pressure_high"] and rows["G"][1]["pressure_high"])      # 첫 실행 뒤 압력이 섰다
-        self.assertIn("DROP · DEFER 안 함", " ".join(rows["G"][1]["context_plan"]))
-        self.assertIn("DROP", " ".join(rows["D"][1]["context_plan"]))
+        for c in ("D", "G"):
+            keep = [r for r in rows[c] if r["context_plan"][0].startswith("기본 결정 KEEP(품질 상태 모름")]
+            self.assertTrue(keep and not any(r["pressure_high"] for r in keep))            # 품질 모름 -> 줄이지 않는다
+        g = [r for r in rows["G"] if r["pressure_high"]]
+        self.assertTrue(g, "품질을 안 뒤에는 압력 HIGH 로 줄인다")
+        self.assertIn("DROP · DEFER 안 함", " ".join(g[0]["context_plan"]))
+        d = [r for r in rows["D"] if r["pressure_high"]]
+        self.assertTrue(d and "DROP" in " ".join(d[0]["context_plan"]))
+
+    def test_BD88_quality_unknown_means_keep(self):
+        """BD-88 · CMD-M11: 품질 상태를 모르면 'LOW 아님' 으로 지나치지 않는다. 품질을 알면 옛 판본과 같은 계획이다."""
+        from ms.policy import AdaptiveContext2, AdaptiveContext3, AdaptiveContext4, AdaptiveContext4c, undecided
+        base = dict(BASE_CONTEXT, budget_chars=1500)
+        high = dict({k: None for k in U.STATES}, token_budget_pressure="HIGH")
+        known = dict(high, answer_reliability="HIGH", correction_rate="LOW")
+        for new, old in ((AdaptiveContext3(), AdaptiveContext()), (AdaptiveContext4(), AdaptiveContext2())):
+            for st in (high, dict(high, answer_reliability="HIGH"), dict(high, correction_rate="LOW")):
+                self.assertEqual(new.plan(st, base)["params"], dict(BASE_CONTEXT, **base), st)   # 하나라도 모르면 KEEP
+                self.assertTrue(undecided(new, st))
+            self.assertEqual(new.plan(known, base)["params"], old.plan(known, base)["params"])  # 알면 같다
+            self.assertFalse(undecided(new, known))
+            lowq = dict(high, answer_reliability="LOW")                                         # 아는 값으로 정해지는 분기
+            self.assertEqual(new.plan(lowq, base)["params"], old.plan(lowq, base)["params"])
+            self.assertFalse(undecided(new, lowq))
+            self.assertTrue(replay({"state": high, "context_policy": new.plan(high, base),
+                                    "prompt_policy": FixedPrompt().plan(high), "provider_policy": {"version": "x"},
+                                    "inputs": {"base_context": base, "default_provider": None}})["ok"])
+        self.assertEqual(AdaptiveContext4c().plan(known, base)["params"], dict(AdaptiveContext4().plan(known, base)["params"], coverage=True))
+        self.assertEqual(AdaptiveContext4c().plan(high, base)["params"], dict(BASE_CONTEXT, **base))     # 모를 때 선언도 없다
 
     def test_loto_finds_a_one_task_effect(self):
         """S1 의 검사 자체가 도는지: 차가 한 과업에만 있으면 그 과업을 뺄 때 부호가 바뀐다고 말해야 한다."""

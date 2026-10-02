@@ -190,7 +190,7 @@ def main(argv=None):
 
 
 def _ask(a):
-    from .policy import AdaptiveContext, AdaptivePrompt, FixedContext, FixedPrompt
+    from .policy import AdaptiveContext3 as AdaptiveContext, AdaptivePrompt, FixedContext, FixedPrompt   # BD-88
     from .providers import make_provider
     from .runtime import Runtime
     spec, m, reg, _ = load(a.spec, a.telemetry)

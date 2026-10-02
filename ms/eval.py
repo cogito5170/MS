@@ -31,7 +31,7 @@ import time
 
 from . import predicate
 from .cli import clock_for, load
-from .policy import AdaptiveContext, AdaptiveContext2, AdaptiveContext2c, AdaptivePrompt, FixedContext, FixedPrompt
+from .policy import AdaptiveContext3, AdaptiveContext4, AdaptiveContext4c, AdaptivePrompt, FixedContext, FixedPrompt
 from . import usage_model as U
 from .providers import make_provider
 from .runtime import Runtime
@@ -42,7 +42,8 @@ CONFIGS = {"A": ("openai", "fixed", "fixed"), "B": ("claude", "fixed", "fixed"),
            "C": ("openai", "adaptive", "fixed"), "D": ("claude", "adaptive", "fixed"),
            "E": ("openai", "adaptive", "adaptive"), "F": ("claude", "adaptive", "adaptive"),
            "G": ("claude", "adaptive2", "fixed"), "H": ("claude", "adaptive2c", "fixed")}
-CONTEXT = {"fixed": FixedContext, "adaptive": AdaptiveContext, "adaptive2": AdaptiveContext2, "adaptive2c": AdaptiveContext2c}
+# BD-88: 평가의 적응 칸은 품질 상태를 모르면 KEEP 하는 판본으로 돈다(ctx-adaptive-3 · -4 · -4c). 옛 판본은 재현에만 남는다
+CONTEXT = {"fixed": FixedContext, "adaptive": AdaptiveContext3, "adaptive2": AdaptiveContext4, "adaptive2c": AdaptiveContext4c}
 PAIRS = [("A", "C", "적응 맥락(openai)"), ("B", "D", "적응 맥락(claude)"),
          ("C", "E", "적응 프롬프트 더함(openai)"), ("D", "F", "적응 프롬프트 더함(claude)"),
          ("D", "G", "덜 자르는 적응 맥락(claude)"), ("B", "G", "덜 자르는 적응 맥락 대 고정(claude)"),

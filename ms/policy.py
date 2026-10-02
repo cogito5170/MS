@@ -161,6 +161,34 @@ class AdaptiveContext2(AdaptiveContext):
     high_cuts = False
 
 
+def _quality_undecided(state) -> bool:
+    """BD-88: 품질 우선 분기(줄임을 허락하는 안전 조건)를 정할 수 없다 -- 아는 값으로 이미 품질 우선이면 정해진 것이다."""
+    if _quality_first(state):
+        return False
+    return state.get("answer_reliability") is None or state.get("correction_rate") is None
+
+
+class _StrictQuality:
+    """BD-76 · BD-88: 품질 상태를 모르면 'LOW 아님' 으로 지나치지 않고 기본 결정(KEEP = 고정)을 낸다."""
+    def plan(self, state: dict, base: dict) -> dict:
+        if _quality_undecided(state):
+            p = dict(BASE_CONTEXT, **base)
+            unknown = [k for k in ("answer_reliability", "correction_rate") if state.get(k) is None]
+            return {"version": self.version, "params": p,
+                    "reasons": [f"기본 결정 KEEP(품질 상태 모름: {', '.join(unknown)} -- BD-76 · BD-88)"]}
+        return super().plan(state, base)
+
+
+class AdaptiveContext3(_StrictQuality, AdaptiveContext):
+    """ctx-adaptive-3 = ctx-adaptive-1 + BD-88(품질 상태를 모르면 KEEP)."""
+    version = "ctx-adaptive-3"
+
+
+class AdaptiveContext4(_StrictQuality, AdaptiveContext2):
+    """ctx-adaptive-4 = ctx-adaptive-2 + BD-88."""
+    version = "ctx-adaptive-4"
+
+
 class AdaptiveContext2c(AdaptiveContext2):
     """ctx-adaptive-2c (F2b 고침 1, BD-86): ctx-adaptive-2 와 계획이 같고, 맥락을 줄였을 때 요약마다 덮음 선언
     coverage{matched, shown, summarized, complete} 를 붙인다. 줄이지 않은 계획(고정과 같음)에는 붙이지 않는다 -- 그래야
@@ -175,7 +203,20 @@ class AdaptiveContext2c(AdaptiveContext2):
         return out
 
 
-CONTEXT_SELECTORS = {c.version: c for c in (FixedContext(), AdaptiveContext(), AdaptiveContext2(), AdaptiveContext2c())}
+class AdaptiveContext4c(AdaptiveContext4):
+    """ctx-adaptive-4c = ctx-adaptive-4 + 덮음 선언(F2b 칸 H, BD-86 · BD-88). 줄였을 때만 선언한다."""
+    version = "ctx-adaptive-4c"
+
+    def plan(self, state: dict, base: dict) -> dict:
+        out = super().plan(state, base)
+        if out["params"] != dict(BASE_CONTEXT, **base):
+            out["params"] = dict(out["params"], coverage=True)
+            out["reasons"] = out["reasons"] + ["덮음 선언"]
+        return out
+
+
+CONTEXT_SELECTORS = {c.version: c for c in (FixedContext(), AdaptiveContext(), AdaptiveContext2(), AdaptiveContext2c(),
+                                            AdaptiveContext3(), AdaptiveContext4(), AdaptiveContext4c())}
 
 # BD-76 · BD-81: 맥락 계획의 안전 기본 결정. 값은 DC 목적 명세(context_runtime 의 default_decision)가 주고 MS 는 읽는다.
 DEFAULT_CONTEXT_ACTIONS = {"KEEP": FixedContext}      # KEEP = 행을 그대로 싣는다 = 고정 맥락
@@ -184,9 +225,11 @@ DEFAULT_CONTEXT_ACTIONS = {"KEEP": FixedContext}      # KEEP = 행을 그대로 
 def undecided(selector, state: dict) -> bool:
     """선택기가 필수 상태를 몰라 규칙을 못 정하나(BD-76). 고정은 늘 정한다. 적응 선택기는 압력 둘(token_budget · context)을
     다 모르면 못 정한다 -- 그때 지금의 계획은 '고정과 같다' 다. (품질 상태 answer_reliability · correction_rate 의 모름은 여기서
-    아직 '못 정함' 으로 세지 않는다 -- baseline 에 물음.)"""
+    '못 정함' 으로 세는 것은 BD-88 이후 판본(ctx-adaptive-3 · -4 · -4c)뿐이다. 옛 판본은 재현을 위해 그대로 둔다.)"""
     if isinstance(selector, FixedContext):
         return False
+    if isinstance(selector, _StrictQuality) and _quality_undecided(state):     # BD-88
+        return True
     return state.get("token_budget_pressure") is None and state.get("context_pressure") is None
 
 
