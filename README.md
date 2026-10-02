@@ -159,6 +159,16 @@ L0 가 없으면 아무것도 안 내고 그대로 돈다. 달라고 했는데 �
 provider 계획 · 중재 결정 · 재현 입력은 `DecisionRecord` 에 있고, id 는 내용의 sha256 이다. 원장에는 `{"kind": "decision"}` 줄이 먼저,
 그 결정이 낳은 `{"kind": "run"}` 줄이 `decision_ref` 로 그것을 가리킨다(`linked()` -- 결정 기록을 고치면 끊긴다). `replay()` 는 결정 기록을
 받는다. 까닭: 텔레메트리는 "무슨 일이 일어났나" 만 적는다 -- [L0 Telemetry](https://github.com/cogito5170/Telemetry) docs/TELEMETRY.md 6 · 7 절.
+도구를 실행하면 결정 기록은 그 **직전**에 지어진다(PC-19 G1). id 의 입력은 그때 이미 다 정해져 있어서 id 는 그대로다.
+
+**ActionIntent 를 따로 기록한다 (`ms/intent.py`, shadow · 선택 의존 · CMD-M15 · BD-97).** [cogito5170/action](https://github.com/cogito5170/action)
+의 꼴 `action-contract/1` 이 import 되고 상태를 **DC 로 읽을 때만**(결정 문맥 id 가 있을 때) 낸다.
+- 의도의 칸은 dc_id · `policy="ms-cr@cr-3"` · `author_kind`(LLM 제안이면 `llm`, BD-76 기본 결정이면 `rule`) · used_keys 다.
+- 원장에는 `{"kind": "intent", "decision_ref", "round", "intent"}` 줄로 남고, `handle()` 의 `intents` 에도 담긴다.
+- error · none · retrieve 는 의도가 아니다.
+- `Proposal` · 중재 · 결정 기록은 그대로다. 의도는 결정 기록에 넣지 않아서 결정 id 가 안 바뀐다.
+- A8 되풀이 열쇠는 `Proposal.key()` 그대로다. intent_id 를 열쇠로 쓰면 까닭만 바꾼 되풀이를 놓친다.
+- 시험은 action 이 옆(`MS_ACTION_PATH`, 기본 `../action`)에 있을 때만 돈다.
 
 ## State — 사용의 모형 (`usage_model.py`)
 

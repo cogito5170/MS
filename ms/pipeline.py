@@ -57,10 +57,11 @@ class Pipeline:
                  arbiter: "Arbiter | None" = None, retrieve_max: int = 20, prompt_plan: "dict | None" = None,
                  model: "str | None" = None, stream: bool = False, tool_mode: str = "text",
                  prompt_layout: "str | None" = None, preamble: str = "", cr: "ContextRuntime | None" = None,
-                 recorder=None, provider_label: "str | None" = None):
+                 recorder=None, provider_label: "str | None" = None, before_execute=None):
         self.m, self.reg = manager, registry
         self.rec = recorder or NullRecorder()      # L0 Telemetry -- 무슨 일이 일어났나만(ms/l0.py)
         self.provider_label = provider_label       # L0 에 적을 provider 이름(런타임이 고른 이름 -- 모의면 sim-*)
+        self.before_execute = before_execute       # 도구 실행 직전에 RunResult 로 불린다 -- 결정 기록을 실행 전에 짓는 자리(PC-19 G1)
         self.provider = llm if isinstance(llm, LLMProvider) else CallableProvider(llm)
         self.llm = llm
         self.cr = cr or ContextRuntime(registry, policy, prompt_plan, prompt_layout, retrieve_max)
@@ -129,6 +130,8 @@ class Pipeline:
                     if nid not in retrieved:
                         retrieved.append(nid)
                 continue
+            if self.before_execute is not None:         # 실행 직전: 이 판까지의 제안 · 판정은 다 정해졌다
+                self.before_execute(res)
             tool = self.reg.get(p.tool)                 # 여기 -- ALLOW 가지 안 -- 가 도구가 불리는 유일한 자리
             with self.rec.tool(tool.name, {"target": p.target, "args": p.args}, call_index=len(res.calls) - 1) as t:
                 try:

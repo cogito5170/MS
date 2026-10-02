@@ -38,9 +38,10 @@ from . import usage_model as U
 from .arbiter import DENY, Arbiter
 from .cr import VERSION as CR_VERSION, ContextRuntime
 from .pipeline import Pipeline
-from . import l0
+from . import intent, l0
 from .decision_record import DecisionRecord
-from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt, default_context_plan, undecided
+from .policy import (BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt, default_context_plan, undecided,
+                     undecided_keys)
 from .run_telemetry import RunRecord, cost_of
 from .tools import RETRIEVE
 
@@ -90,6 +91,7 @@ class Runtime:
         self.prices, self.ledger_path, self.max_rounds, self.wall = prices, ledger_path, max_rounds, wall
         self.records: dict = {}
         self.decisions: dict = {}
+        self.intents: dict = {}         # 결정 id -> ActionIntent 기록(shadow, CMD-M15). 결정 기록 밖에 둔다
         self.state_reader = state_reader
         self.l0_ledger, self.l0_sink = l0_ledger, l0_sink      # L0 Telemetry(선택 의존). 둘 다 없으면 안 낸다
         if (l0_ledger or l0_sink) and not l0.available():
@@ -107,25 +109,32 @@ class Runtime:
         state, source, supplied = self._read_state(sid, request)
         plan = ContextRuntime.plan(state, self.ctx_sel, self.prompt_sel, self.base_context, self.prompt_layout)
         action = source.get("default_action")
+        rule = None
         if action is not None and undecided(self.ctx_sel, state):
             # BD-76: 규칙이 정해지지 않으면 결정 문맥이 준 기본 결정. 지금 선택기는 그때 이미 고정과 같은 계획을 내므로
             # 보이는 맥락은 그대로다(시험) -- 계획 이유와 판본만 기본 결정으로 남는다
             plan["context_policy"] = default_context_plan(action, self.base_context)
+            rule = {"action": action, "rationale": plan["context_policy"]["reasons"][0],
+                    "keys": undecided_keys(self.ctx_sel)}
         cplan, pplan = plan["context_policy"], plan["prompt_policy"]
         choice = self.provider_policy.select(state, request)
         provider = self.providers[choice["provider"]]
         run_id = request.get("run_id") or f"run-{next(_ids)}-{int(self.clock() * 1000) % 10**8}"
         l0rec = l0.recorder(run_id, self.l0_ledger, self.l0_sink)
         l0rec.run_start(model=choice.get("model"), provider=choice["provider"])
+        pre = []                  # 도구를 실행하면 결정 기록은 그 직전에 지어진다(PC-19 G1 -- ActionCommand.decision_ref 의 자리)
         pipe = Pipeline(self.m, self.reg, provider, None, self.arbiter,
                         model=choice.get("model"), stream=bool(request.get("stream")),
                         tool_mode=request.get("tool_mode", "text"), preamble=request.get("preamble", ""),
                         cr=ContextRuntime.from_plan(self.reg, plan), recorder=l0rec,
-                        provider_label=choice["provider"])
+                        provider_label=choice["provider"],
+                        before_execute=lambda r: pre.append(self._decision(state, cplan, pplan, choice, r, source)))
         res = pipe.run(request["task"], request.get("queries", ()), max_rounds=request.get("max_rounds", self.max_rounds),
                        supplied=supplied)
         total_ms = (self.wall() - t0) * 1000
-        dec, rec = self._record(request, sid, state, cplan, pplan, choice, provider, res, total_ms, run_id, source)
+        dec = pre[0] if pre else self._decision(state, cplan, pplan, choice, res, source)
+        rec = self._record(request, choice, provider, res, total_ms, run_id, dec)
+        intents = intent.intents(source, res.rounds, rule)
         # 끝 요약: 런타임(MS)이 아는 사실만. 비용은 provider 가 보고했을 때만(가격표 계산은 L0 가 아니다)
         l0rec.run_end(decision_ref=dec.id, terminal_reason=res.outcome, num_turns=len(res.rounds),
                       run_duration_ms=round(total_ms, 3), model=rec.run["model"],
@@ -137,8 +146,13 @@ class Runtime:
         self.records[rec.run["run_id"]] = rec
         self.decisions[dec.id] = dec
         self._ledger({"kind": "decision", "decision": dec.to_dict()})     # 결정 먼저, 그 결정이 낳은 실행은 id 로 잇는다
+        if intents:
+            self.intents[dec.id] = intents
+        for it in intents:
+            self._ledger({"kind": "intent", "decision_ref": dec.id, **it})
         self._ledger({"kind": "run", "record": rec.to_dict()})
-        return {"run_id": rec.run["run_id"], "record": rec.to_dict(), "decision": dec.to_dict(), "result": res.to_dict()}
+        return {"run_id": rec.run["run_id"], "record": rec.to_dict(), "decision": dec.to_dict(), "result": res.to_dict(),
+                "intents": intents}
 
     def _read_state(self, sid: str, request: "dict | None" = None):
         """정책 · CR 이 볼 상태와 그 출처(, 결정 문맥이 돌린 질의 결과). 꽂은 읽기가 무엇을 주든 사용 상태 이름과 스칼라 값만,
@@ -190,8 +204,18 @@ class Runtime:
         return r
 
     # -- 기록 ---------------------------------------------------------------------------------------------------
-    def _record(self, request, sid, state, cplan, pplan, choice, provider, res, total_ms,
-                run_id, state_source=None) -> "tuple[DecisionRecord, RunRecord]":
+    def _decision(self, state, cplan, pplan, choice, res, state_source=None) -> DecisionRecord:
+        """결정 기록. 입력(상태 · 계획 · 중재 결정)은 도구 실행 전에 다 정해진다 -- 그래서 실행 직전에 지어도 id 가 같다."""
+        decisions = [r["decision"] for r in res.rounds if "decision" in r]
+        return DecisionRecord(
+            cr=CR_VERSION, state=state, context_policy=cplan, prompt_policy=pplan, provider_policy=choice,
+            arbiter_decision={"final": decisions[-1] if decisions else None,
+                              "all": [[d["verdict"], d["rule"]] for d in decisions]},
+            inputs={"base_context": self.base_context, "default_provider": self.provider_policy.default
+                    if isinstance(self.provider_policy, ExplicitProvider) else None},
+            state_source=state_source or {})
+
+    def _record(self, request, choice, provider, res, total_ms, run_id, dec: DecisionRecord) -> RunRecord:
         calls = res.calls
         decisions = [r["decision"] for r in res.rounds if "decision" in r]
         proposals = [r["proposal"] for r in res.rounds if "proposal" in r]
@@ -231,19 +255,12 @@ class Runtime:
         else:
             c = cost_of(calls[0]["model"] if calls else "", tokens, self.prices)
             cost = {"usd": c, "source": "price_table" if c is not None else None}
-        final = decisions[-1] if decisions else None
         exts = {}
         for c in calls:
             for k, v in (c["extensions"] or {}).items():
                 exts.setdefault(k, []).append(v)
         unsupported = sorted({u for c in calls for u in c["unsupported"]})
-        dec = DecisionRecord(
-            cr=CR_VERSION, state=state, context_policy=cplan, prompt_policy=pplan, provider_policy=choice,
-            arbiter_decision={"final": final, "all": [[d["verdict"], d["rule"]] for d in decisions]},
-            inputs={"base_context": self.base_context, "default_provider": self.provider_policy.default
-                    if isinstance(self.provider_policy, ExplicitProvider) else None},
-            state_source=state_source or {})
-        return dec, RunRecord(
+        return RunRecord(
             run={"run_id": run_id, "session_id": request["session"], "provider": choice["provider"],
                  "model": calls[0]["model"] if calls else choice.get("model"), "timestamp": self.clock(),
                  "simulated": bool(getattr(provider, "simulated", False))},

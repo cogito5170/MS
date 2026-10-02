@@ -322,6 +322,12 @@ class ArbiterRules(unittest.TestCase):
         self.assertEqual(self.d(tool="throttle", target="srv07", args={"level": 2}).verdict, ALLOW)
         self.assertEqual(self.d(tool="throttle", target="srv07", args={"level": 2}).rule, "A8")
 
+    def test_A8_repeat_with_only_rationale_changed(self):
+        """G5(CMD-M15): 까닭만 바꾼 되풀이도 되풀이다. A8 열쇠에 rationale 이 들어가면(예: intent_id 를 열쇠로 쓰면) 놓친다."""
+        self.assertEqual(self.d(tool="throttle", target="srv07", args={"level": 2}, rationale="뜨겁다").verdict, ALLOW)
+        d = self.d(tool="throttle", target="srv07", args={"level": 2}, rationale="아직 뜨겁다, 한 번 더")
+        self.assertEqual((d.verdict, d.rule), (DENY, "A8"))
+
     def test_exception_fails_closed(self):
         d = self.arb.decide(P(tool="throttle", target="srv07", args={"level": 2}), self.ctx, None)
         self.assertEqual((d.verdict, d.rule), (DENY, "E"))

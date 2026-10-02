@@ -1533,5 +1533,146 @@ class Harness(unittest.TestCase):
         self.assertEqual(rec["run"]["provider"], "sim-gemini")
 
 
+def action_pkg():
+    """Action(cogito5170/action)의 꼴 -- 선택 의존. 경로는 MS_ACTION_PATH(기본 ../action). 없으면 None."""
+    path = os.environ.get("MS_ACTION_PATH", os.path.join(ROOT, "..", "action"))
+    if os.path.isdir(os.path.join(path, "action")) and path not in sys.path:
+        sys.path.insert(0, path)
+    from ms import intent
+    return intent._action()
+
+
+class ActionIntentShadow(unittest.TestCase):
+    """CMD-M15 · BD-97: ActionIntent 를 따로 지어 기록한다(shadow). DC 배선일 때만, action 패키지가 있을 때만 낸다.
+    Proposal · 동작 · 결정 id 는 그대로다. 결정 기록은 도구 실행 **직전**에 지어진다(PC-19 G1)."""
+
+    def setUp(self):
+        self.A = action_pkg()
+        if self.A is None:
+            self.skipTest("옆에 action 이 없다(MS_ACTION_PATH)")
+
+    def _rt(self, reader=None, llm=None, **kw):
+        spec, m, reg, *_ = world()
+        rt = Runtime(m, reg, {"p": llm or make_provider("sim-claude")}, state_reader=reader, **kw)
+        rt.open_session("s", {"token_budget": 1000})
+        return spec, rt
+
+    @staticmethod
+    def _fake(record=None):
+        rec = {"id": "dc-fake"} if record is None else record
+        return lambda um, sid, req: {"state": dict(U.snapshot(um, sid)), "record": rec}
+
+    def test_real_dc_intent_passes_the_contract(self):
+        """끝난 기준 1: 진짜 DC 배선에서 낸 의도가 계약 검사(from_dict 왕복)를 지나고, 원장에서 결정에 이어진다."""
+        import tempfile
+        dc = os.environ.get("MS_DC_PATH", os.path.join(ROOT, "..", "DC"))
+        if not os.path.isdir(os.path.join(dc, "dc")):
+            self.skipTest("옆에 DC 가 없다(MS_DC_PATH)")
+        from ms.eval import dc_state_reader
+        Reader, _ = dc_state_reader()
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = os.path.join(tmp, "runs.jsonl")
+            spec, rt = self._rt(ledger_path=ledger)
+            rt.state_reader = Reader(rt.um, rt.m)
+            out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+            with open(ledger, encoding="utf-8") as fh:
+                lines = [json.loads(l) for l in fh]
+        src = out["decision"]["state_source"]
+        self.assertEqual(out["result"]["outcome"], "executed")
+        self.assertEqual(len(out["intents"]), 1)
+        d = out["intents"][0]["intent"]
+        self.assertEqual(self.A.ActionIntent.from_dict(json.loads(json.dumps(d))).to_dict(), d)      # 왕복
+        self.assertEqual((d["dc_id"], d["policy"], d["author_kind"]), (src["id"], "ms-cr@cr-3", "llm"))
+        self.assertEqual((d["action"], d["target"]), ("throttle", "srv07"))
+        self.assertEqual(d["used_keys"], src["queries"])                       # LLM 이 STATE 로 본 질의(상한)
+        self.assertEqual([l["kind"] for l in lines], ["decision", "intent", "run"])
+        self.assertEqual(lines[1]["decision_ref"], out["decision"]["id"])
+        self.assertNotIn("intent", json.dumps(out["decision"]))                # 결정 기록 밖이다 -- id 의 입력이 아니다
+        self.assertEqual(rt.intents[out["decision"]["id"]], out["intents"])
+
+    def test_snapshot_path_and_readers_without_id_emit_nothing(self):
+        """BD-97: DC id 가 없는 길에서는 내지 않는다."""
+        for reader in (None, self._fake({}), lambda um, sid: {"state": U.snapshot(um, sid), "record": None}):
+            spec, rt = self._rt(reader)
+            out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+            self.assertEqual(out["result"]["outcome"], "executed")             # 대조: 실행은 일어났다
+            self.assertEqual((out["intents"], rt.intents), ([], {}))
+
+    def test_without_action_package_nothing_changes(self):
+        """선택 의존: 없거나 이름만 같은 가짜면 의도를 안 내고, 결정 id · 결과는 있을 때와 같다."""
+        import types
+        from unittest import mock
+        spec, rt = self._rt(self._fake())
+        on = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        self.assertEqual(len(on["intents"]), 1)
+        for absent in (None, types.ModuleType("action")):
+            with mock.patch.dict(sys.modules, {"action": absent}):
+                spec, rt = self._rt(self._fake())
+                off = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+            self.assertEqual(off["intents"], [])
+            self.assertEqual(off["decision"]["id"], on["decision"]["id"])
+            same = lambda o: (o["result"]["outcome"], o["result"]["executed"], o["result"]["ingested"],   # 지연 칸은 뺀다
+                              [(r.get("proposal"), r.get("decision")) for r in o["result"]["rounds"]])
+            self.assertEqual(same(off), same(on))
+
+    def test_rule_intent_for_the_default_decision(self):
+        """BD-76 기본 결정을 쓰면 규칙의 의도(author_kind rule)가 판 0 으로 하나. used_keys 는 그 규칙이 읽은 상태다."""
+        from ms.policy import AdaptiveContext3
+        spec, rt = self._rt(self._fake({"id": "dc-r", "default_action": "KEEP"}), context_selector=AdaptiveContext3())
+        out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        rule = out["intents"][0]
+        self.assertEqual(rule["round"], 0)
+        d = self.A.ActionIntent.from_dict(rule["intent"]).to_dict()
+        self.assertEqual((d["author_kind"], d["action"], d["target"], d["args"]), ("rule", "KEEP", None, {}))
+        self.assertEqual(d["used_keys"], ["session.answer_reliability", "session.context_pressure",
+                                          "session.correction_rate", "session.token_budget_pressure"])
+        self.assertIn("기본 결정 KEEP", d["rationale"])
+        self.assertEqual([i["intent"]["author_kind"] for i in out["intents"]], ["rule", "llm"])
+        spec, rt = self._rt(self._fake({"id": "dc-r", "default_action": "KEEP"}))          # 고정은 늘 정한다 -- 규칙 의도 없음
+        out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        self.assertEqual([i["intent"]["author_kind"] for i in out["intents"]], ["llm"])
+
+    def test_error_none_and_retrieve_are_not_intents(self):
+        """의도가 아닌 셋(PC-19 §2): error(A0) · none · retrieve. DENY 된 진짜 도구 제안은 의도다(Guard 앞의 꼴)."""
+        replies = [{"tool": "retrieve", "target": "h-없음"}, "엉터리", {"tool": "throttle", "target": 7},   # 도구 이름이 있는 A0
+                   {"tool": "reboot", "target": "srv07"},
+                   {"tool": "throttle", "target": "srv07", "args": {"level": 2}}]
+        spec, rt = self._rt(self._fake(), llm=ScriptedLLM(replies))
+        out = rt.handle({"session": "s", "task": "x", "queries": spec["queries"], "max_rounds": 5})
+        rules = [r["decision"]["rule"] for r in out["result"]["rounds"]]
+        self.assertEqual(rules, ["A2", "A0", "A0", "A7", "0"])                       # 대조: 네 판이 다 판정을 받았다
+        self.assertEqual([(i["round"], i["intent"]["action"]) for i in out["intents"]], [(4, "reboot"), (5, "throttle")])
+        spec, rt = self._rt(self._fake(), llm=ScriptedLLM([{"tool": "none"}]))
+        self.assertEqual(rt.handle({"session": "s", "task": "x", "queries": spec["queries"]})["intents"], [])
+
+class DecisionBeforeExecution(unittest.TestCase):
+    """PC-19 G1(CMD-M15): action 패키지와 상관없이 늘 돈다."""
+
+    def test_decision_is_built_right_before_the_tool_runs(self):
+        """PC-19 G1: 결정 기록은 실행 직전에 한 번 지어지고, 실행 뒤에 다시 지어도 id 가 같다(P0)."""
+        from unittest import mock
+        from ms.tools import ToolSpec
+        order, args = [], []
+        real_run, real_dec = ToolSpec.run, Runtime._decision
+
+        def run(tool, target, a):
+            order.append("run")
+            return real_run(tool, target, a)
+
+        def dec(rt, *a):
+            order.append("decision")
+            args.append(a)
+            return real_dec(rt, *a)
+        spec, m, reg, *_ = world()
+        rt = Runtime(m, reg, {"p": make_provider("sim-claude")},
+                     state_reader=lambda um, sid, req: {"state": dict(U.snapshot(um, sid)), "record": {"id": "dc-fake"}})
+        rt.open_session("s", {"token_budget": 1000})
+        with mock.patch.object(ToolSpec, "run", run), mock.patch.object(Runtime, "_decision", dec):
+            out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        self.assertEqual(order, ["decision", "run"])
+        self.assertEqual(real_dec(rt, *args[0]).id, out["decision"]["id"])     # 실행 뒤의 RunResult 로 다시 지어도 같다
+        self.assertEqual(out["record"]["decision_ref"], out["decision"]["id"])
+
+
 if __name__ == "__main__":
     unittest.main()
