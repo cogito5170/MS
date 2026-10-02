@@ -1,0 +1,71 @@
+{
+ "tests": {
+  "enforce": {
+   "table": {
+    "DC Arbiter - · Guard None → 안 함": 5,
+    "DC Arbiter ALLOW · Guard ALLOW → 실행": 32,
+    "DC Arbiter ALLOW · Guard ALLOW → 안 함": 2,
+    "DC Arbiter ALLOW · Guard DENY(D) → 안 함": 6,
+    "DC Arbiter ALLOW · Guard DENY(E) → 안 함": 1,
+    "DC Arbiter ALLOW · Guard DENY(E, 가짜 리더) → 안 함": 8,
+    "DC Arbiter ALLOW · Guard None → 안 함": 2,
+    "DC Arbiter ALLOW · Guard SAFE_ACTION → 실행": 1,
+    "DC 둘 다 ALLOW · 실행기가 받지 않아 막음": 2,
+    "DC 막힘": 19,
+    "DC 실행": 57,
+    "snapshot 도구 실행": 0,
+    "snapshot 실행": 443,
+    "시험이 고른 shadow 실행(제외)": 2
+   },
+   "violations": [],
+   "n_violations": 0
+  },
+  "vs_shadow": {
+   "table": {
+    "enforce 실행 · shadow 와 같음": 33,
+    "shadow 는 실행 · enforce 는 막음": 18,
+    "결정 id 같음": 41,
+    "결정 id 다름": 18
+   },
+   "differ": [],
+   "one_side": {
+    "shadow_only": 13,
+    "enforce_only": 0
+   }
+  }
+ },
+ "sim": {
+  "enforce": {
+   "table": {
+    "DC Arbiter - · Guard None → 안 함": 16,
+    "DC Arbiter ALLOW · Guard ALLOW → 실행": 432,
+    "DC Arbiter ALLOW · Guard DENY(D) → 안 함": 32,
+    "DC 막힘": 32,
+    "DC 실행": 480
+   },
+   "violations": [],
+   "n_violations": 0
+  },
+  "vs_shadow": {
+   "table": {
+    "enforce 실행 · shadow 와 같음": 432,
+    "shadow 는 실행 · enforce 는 막음": 32,
+    "결정 id 같음": 67,
+    "결정 id 다름": 413
+   },
+   "differ": [],
+   "one_side": {
+    "shadow_only": 0,
+    "enforce_only": 0
+   }
+  }
+ },
+ "versions": {
+  "ms": "a2ded32",
+  "guard": "be871b9",
+  "DC": "b55ff04",
+  "action": "2f4791e",
+  "health": "afcff39",
+  "Telemetry": "89d2887"
+ }
+}
