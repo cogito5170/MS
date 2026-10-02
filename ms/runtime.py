@@ -38,7 +38,7 @@ from . import usage_model as U
 from .arbiter import DENY, Arbiter
 from .cr import VERSION as CR_VERSION, ContextRuntime
 from .pipeline import Pipeline
-from . import dispatch as D, guard_shadow, intent, l0
+from . import dispatch as D, guard_shadow, intent, l0, verify as V
 from .decision_record import DecisionRecord
 from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt, default_context_plan, undecided
 from .run_telemetry import RunRecord, cost_of
@@ -71,7 +71,7 @@ class Runtime:
                  provider_policy=None, base_context: "dict | None" = None, prices: "dict | None" = None,
                  ledger_path: "str | None" = None, max_rounds: int = 4, wall=time.perf_counter,
                  usage_manager=None, prompt_layout: "str | None" = None, l0_ledger: "str | None" = None,
-                 l0_sink=None, state_reader=None):
+                 l0_sink=None, state_reader=None, run_state=None):
         self.m, self.reg, self.providers = manager, registry, dict(providers)
         self.um = usage_manager or manager
         if self.um.clock is not manager.clock:
@@ -84,6 +84,8 @@ class Runtime:
         self.arbiter = Arbiter(registry, grants, clock=self.clock)
         self.guard = guard_shadow.Shadow(registry, grants) if guard_shadow.available() else None   # shadow(CMD-M17)
         self.dispatch = D.Dispatch(registry) if D.available() else None   # DC 길 실행기(CMD-M20 shadow → M22 execute)
+        # Health VERIFY(CMD-M23, 선택 의존). run_state: $run.* 읽기 · subjects 를 줄 Sensor state-export 이음매(없으면 None)
+        self.verifier = V.Verifier(registry, run_state) if V.available() else None
         self.ctx_sel = context_selector or FixedContext()
         self.prompt_sel = prompt_selector or FixedPrompt()
         default = next(iter(self.providers)) if self.providers else None
@@ -95,6 +97,7 @@ class Runtime:
         self.intents: dict = {}         # 결정 id -> ActionIntent 기록(shadow, CMD-M15). 결정 기록 밖에 둔다
         self.guards: dict = {}          # 결정 id -> GuardResult 기록(shadow, CMD-M17). 결정 기록 밖에 둔다
         self.executions: dict = {}      # 결정 id -> 실행기 기록(CMD-M20 · M22). 결정 기록 밖에 둔다
+        self.verifications: dict = {}   # 결정 id -> VerificationRecord 들(CMD-M23). 결정 기록 밖에 둔다
         self.state_reader = state_reader
         self.l0_ledger, self.l0_sink = l0_ledger, l0_sink      # L0 Telemetry(선택 의존). 둘 다 없으면 안 낸다
         if (l0_ledger or l0_sink) and not l0.available():
@@ -104,8 +107,36 @@ class Runtime:
     def open_session(self, name: str, budgets: dict) -> str:
         return U.open_session(self.um, name, budgets)
 
+    def close_windows(self) -> list:
+        """창이 닫힌 PENDING 검증을 다시 판정해 원장에 남긴다(CMD-M23). 요청마다 먼저 불리고, 바깥에서도 부를 수 있다."""
+        if self.verifier is None:
+            return []
+        out = []
+        for decision_ref, rec in self.verifier.close_windows(self.m, self.clock() * 1000):
+            self.verifications.setdefault(decision_ref, []).append(rec)
+            self._ledger({"kind": "verification", "decision_ref": decision_ref, "when": "window_close", "record": rec})
+            out.append({"decision_ref": decision_ref, "when": "window_close", "record": rec})
+        return out
+
+    def _verify_after(self, executions, run_id, decision_ref) -> list:
+        """실행기가 실행한 명령마다, 관측을 넣은 직후 VERIFY. 판정은 기록만 한다."""
+        if self.verifier is None:
+            return []
+        from action.forms import ActionCommand, ActionOutcome
+        out = []
+        for x in executions:
+            ex = x.get("execution") or {}
+            if not ex.get("executed") or x.get("command") is None:
+                continue
+            outcome = ActionOutcome.from_dict(ex["outcome"]) if ex.get("outcome") else None
+            rec = self.verifier.after_execute(ActionCommand.from_dict(x["command"]), run_id, decision_ref, outcome,
+                                              self.m, self.clock() * 1000)
+            out.append({"round": x["round"], "when": "after_execute", "record": rec})
+        return out
+
     def handle(self, request: dict) -> dict:
         t0 = self.wall()
+        self.close_windows()
         sid = U.session_id(request["session"])
         if sid not in self.um.graph.nodes:
             raise KeyError(f"세션 {request['session']} 이 열리지 않았다(open_session)")
@@ -162,6 +193,7 @@ class Runtime:
         dec = pre[0] if pre else self._decision(state, cplan, pplan, choice, res, source)
         rec = self._record(request, choice, provider, res, total_ms, run_id, dec)
         intents = intent.intents(source, res.rounds)
+        verifications = self._verify_after(executions, run_id, dec.id)
         # 끝 요약: 런타임(MS)이 아는 사실만. 비용은 provider 가 보고했을 때만(가격표 계산은 L0 가 아니다)
         l0rec.run_end(decision_ref=dec.id, terminal_reason=res.outcome, num_turns=len(res.rounds),
                       run_duration_ms=round(total_ms, 3), model=rec.run["model"],
@@ -185,9 +217,13 @@ class Runtime:
             self.executions[dec.id] = executions
         for x in executions:
             self._ledger({"kind": "execution", "decision_ref": dec.id, **x})
+        if verifications:
+            self.verifications.setdefault(dec.id, []).extend(v["record"] for v in verifications)
+        for v in verifications:
+            self._ledger({"kind": "verification", "decision_ref": dec.id, **v})
         self._ledger({"kind": "run", "record": rec.to_dict()})
         return {"run_id": rec.run["run_id"], "record": rec.to_dict(), "decision": dec.to_dict(), "result": res.to_dict(),
-                "intents": intents, "guards": guards, "executions": executions}
+                "intents": intents, "guards": guards, "executions": executions, "verifications": verifications}
 
     def _read_state(self, sid: str, request: "dict | None" = None):
         """정책 · CR 이 볼 상태와 그 출처(, 결정 문맥이 돌린 질의 결과). 꽂은 읽기가 무엇을 주든 사용 상태 이름과 스칼라 값만,

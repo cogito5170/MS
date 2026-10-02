@@ -1828,6 +1828,7 @@ class ExecutorWiring(unittest.TestCase):
         self.assertEqual((x["execution"]["mode"], x["execution"]["executed"], x["execution"]["refused"]),
                          ("execute", True, None))
         self.assertNotIn("fallback", x)
+        lines = [l for l in lines if l["kind"] != "verification"]             # VERIFY 줄은 따로 본다(CMD-M23)
         self.assertEqual([l["kind"] for l in lines], ["decision", "intent", "guard", "execution", "run"])
         self.assertEqual(lines[3]["decision_ref"], out["decision"]["id"])
         self.assertEqual(x["material_vs_guard"], "같음")                      # 둘 다 ALLOW -> guard command_material 과 같은 재료
@@ -1999,6 +2000,153 @@ class ToolsAreActionSpecs(unittest.TestCase):
         tool = reg.get("throttle")
         for args in ({"level": 2}, {"level": 9}, {}, {"level": 1, "x": 1}, "x"):
             self.assertEqual(tool.check_args(args), action.params.check_args(tool.params, args))
+
+
+def health_pkg():
+    """Health(cogito5170/health) -- 선택 의존. 경로는 MS_HEALTH_PATH(기본 ../health). 없으면 None."""
+    path = os.environ.get("MS_HEALTH_PATH", os.path.join(ROOT, "..", "health"))
+    if os.path.isdir(os.path.join(path, "health")) and path not in sys.path:
+        sys.path.append(path)
+    from ms import verify
+    return verify._health()
+
+
+POST = [{"entity": "$target", "pred": ["throttled", "==", True]}]
+
+
+class VerifyWiring(unittest.TestCase):
+    """CMD-M23: 런타임이 Health VERIFY 를 부른다 -- 실행(관측 ingest) 직후와 창이 닫힐 때. VerificationRecord 는 원장에
+    decision_ref 와 함께. 대본 세계: throttle 에 사후조건(throttled == true) · 창 60 s. 판정은 기록만 한다."""
+
+    def setUp(self):
+        self.H = health_pkg()
+        dc = os.environ.get("MS_DC_PATH", os.path.join(ROOT, "..", "DC"))
+        if self.H is None or not os.path.isdir(os.path.join(dc, "dc")):
+            self.skipTest("옆에 health · DC 가 없다(MS_HEALTH_PATH · MS_DC_PATH)")
+        from ms.eval import dc_state_reader
+        self.Reader = dc_state_reader()[0]
+
+    def _rt(self, llm=None, handler=None, before=None, reader=True, **kw):
+        import tempfile
+        from ms.tools import ToolRegistry
+        spec, m, reg, pol, arb, clock = world()
+        tools = copy.deepcopy(spec["tools"])
+        for t in tools:
+            if t["name"] == "throttle":
+                t.update(postcondition=POST, window_ms=60000)
+        reg = ToolRegistry(tools)
+        if handler is not None:
+            reg.get("throttle").handler = handler
+        if before is not None:
+            before(m, clock)
+        self.ledger = os.path.join(tempfile.mkdtemp(), "runs.jsonl")
+        rt = Runtime(m, reg, {"p": llm or make_provider("sim-claude")}, ledger_path=self.ledger, **kw)
+        if reader:
+            rt.state_reader = self.Reader(rt.um, m)
+        rt.open_session("s", {"token_budget": 1000})
+        return spec, rt, clock
+
+    def _go(self, rt, spec, task="srv07 을 throttle"):
+        return rt.handle({"session": "s", "task": task, "queries": spec["queries"]})
+
+    def _lines(self):
+        with open(self.ledger, encoding="utf-8") as fh:
+            return [json.loads(l) for l in fh]
+
+    def test_effect_happened_verified(self):
+        spec, rt, clock = self._rt()
+        out = self._go(rt, spec)
+        (v,) = out["verifications"]
+        rec = self.H.VerificationRecord.from_dict(json.loads(json.dumps(v["record"])))      # 계약 꼴 왕복
+        self.assertEqual((rec.result, rec.reason, rec.final, v["when"]), ("VERIFIED", "MET", True, "after_execute"))
+        (x,) = out["executions"]
+        self.assertEqual(rec.command_id, x["command"]["command_id"])
+        self.assertEqual(rec.entity, f"action:{out['run_id']}:{x['command']['command_id']}")
+        self.assertEqual(rec.window["start_ms"], x["command"]["issued_at"])
+        self.assertEqual(rec.evidence[0]["entity"], "srv07")                              # $target 을 명령에서 풀었다
+        kinds = [l["kind"] for l in self._lines()]
+        self.assertEqual([k for k in kinds if k != "guard"], ["decision", "intent", "execution", "verification", "run"])
+        line = next(l for l in self._lines() if l["kind"] == "verification")
+        self.assertEqual((line["decision_ref"], line["record"]), (out["decision"]["id"], v["record"]))
+        self.assertLess(kinds.index("execution"), kinds.index("verification"))
+        self.assertEqual(rt.verifier.pending, [])
+
+    def test_no_effect_pending_then_not_verified_when_the_window_closes(self):
+        spec, rt, clock = self._rt(handler=lambda target, args: [{"signal": "throttle_ack", "value": False}])
+        out = self._go(rt, spec)
+        rec = out["verifications"][0]["record"]
+        self.assertEqual((rec["result"], rec["reason"], rec["final"]), ("PENDING", "WINDOW_OPEN", False))
+        clock.t += 30
+        self.assertEqual(rt.close_windows(), [])                                          # 창이 아직 열려 있다
+        clock.t += 31
+        (closed,) = rt.close_windows()
+        self.assertEqual((closed["record"]["result"], closed["record"]["reason"], closed["record"]["final"]),
+                         ("NOT_VERIFIED", "UNMET_AT_CLOSE", True))
+        self.assertEqual(closed["record"]["command_id"], rec["command_id"])
+        line = [l for l in self._lines() if l["kind"] == "verification"][-1]
+        self.assertEqual((line["when"], line["decision_ref"]), ("window_close", out["decision"]["id"]))
+        self.assertEqual(rt.close_windows(), [])                                          # 한 번만 닫는다
+
+    def test_nothing_observed_pending_then_unknown(self):
+        spec, rt, clock = self._rt(handler=lambda target, args: [])
+        out = self._go(rt, spec)
+        self.assertEqual(out["verifications"][0]["record"]["result"], "PENDING")
+        clock.t += 61
+        out2 = self._go(rt, spec, task="다시")                                            # 다음 요청이 먼저 창을 닫는다
+        line = next(l for l in self._lines() if l.get("when") == "window_close")
+        self.assertEqual((line["record"]["result"], line["record"]["reason"]), ("UNKNOWN", "NO_POST_OBSERVATION"))
+        self.assertEqual(line["decision_ref"], out["decision"]["id"])
+
+    def test_observation_from_before_the_command_is_not_evidence(self):
+        """명령 전부터 throttled=true 였고 명령 뒤 관측이 없다 -- 값은 참이지만 근거가 아니다(BD-99)."""
+        from ms.telemetry import Telemetry
+
+        def before(m, clock):
+            m.ingest(Telemetry("bmc", "srv07", "throttle_ack", True, ts=clock.t - 10))
+        spec, rt, clock = self._rt(handler=lambda target, args: [], before=before)
+        out = self._go(rt, spec)
+        rec = out["verifications"][0]["record"]
+        self.assertEqual(rec["result"], "PENDING")
+        self.assertLess(rec["evidence"][0]["observed_at"], rec["window"]["start_ms"])
+        clock.t += 61
+        (closed,) = rt.close_windows()
+        self.assertEqual((closed["record"]["result"], closed["record"]["reason"]), ("UNKNOWN", "NO_POST_OBSERVATION"))
+
+    def test_stale_value_is_not_usable_evidence(self):
+        """창이 닫힐 때 그 값이 ttl(600 s)을 넘겨 낡았으면 쓸 수 없다 -- 거짓 값이라도 NOT_VERIFIED 가 아니라 UNKNOWN(NOT_USABLE)."""
+        spec, rt, clock = self._rt(handler=lambda target, args: [{"signal": "throttle_ack", "value": False}])
+        self._go(rt, spec)
+        clock.t += 700
+        (closed,) = rt.close_windows()
+        self.assertEqual((closed["record"]["result"], closed["record"]["reason"]), ("UNKNOWN", "NOT_USABLE"))
+
+    def test_tool_without_postcondition_is_no_spec(self):
+        spec, rt, clock = self._rt(ScriptedLLM([{"tool": "reboot", "target": "srv07", "rationale": "x"}]),
+                                   grants=("reboot",))
+        out = self._go(rt, spec)
+        rec = out["verifications"][0]["record"]
+        self.assertEqual((rec["result"], rec["reason"], rec["final"], rec["spec"]), ("UNKNOWN", "NO_SPEC", True, None))
+
+    def test_outcome_is_not_used_to_judge(self):
+        """실행기 결과가 오류(is_error)여도 효과가 관측되면 VERIFIED 다 -- "됐다/안 됐다" 는 관측일 뿐(BD-99)."""
+        spec, rt, clock = self._rt(handler=lambda target, args: [{"signal": "throttle_ack", "value": True},
+                                                                 {"signal": "tool_error", "value": "느림"}])
+        out = self._go(rt, spec)
+        self.assertTrue(out["executions"][0]["execution"]["outcome"]["is_error"])         # 대조: 실행기는 오류로 봤다
+        rec = out["verifications"][0]["record"]
+        self.assertEqual((rec["result"], rec["reason"]), ("VERIFIED", "MET"))
+
+    def test_snapshot_path_and_no_health_change_nothing(self):
+        from unittest import mock
+        spec, rt, clock = self._rt(reader=False)
+        out = self._go(rt, spec)
+        self.assertEqual((out["result"]["outcome"], out["verifications"]), ("executed", []))
+        with mock.patch.dict(sys.modules, {"health": None}):
+            spec, rt, clock = self._rt()
+        self.assertIsNone(rt.verifier)
+        off = self._go(rt, spec)
+        self.assertEqual(off["verifications"], [])
+        self.assertTrue(off["executions"][0]["execution"]["executed"])                     # 실행기는 그대로
 
 
 if __name__ == "__main__":

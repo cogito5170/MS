@@ -93,7 +93,8 @@ class ToolRegistry:
              if isinstance(t, ToolSpec) else t)
         keep = {k: d[k] for k in ("name", "target_model", "params", "preconditions", "risk", "description") if k in d}
         keep["preconditions"] = [list(p) for p in keep.get("preconditions", ())]
-        spec = ActionSpec.from_tool(keep, f"ms-{digest(keep)}")
+        post = {"postcondition": list(d.get("postcondition", ())), "window_ms": d.get("window_ms")}   # VERIFY(BD-108 §1)
+        spec = ActionSpec.from_tool(keep, f"ms-{digest(dict(keep, **post))}", **post)
         tool = ToolSpec.from_dict(dict(to_ms_tool(spec), effect=effect))
         tool.handler = handler
         self.specs[spec.name] = spec

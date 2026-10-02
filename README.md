@@ -198,6 +198,18 @@ provider 계획 · 중재 결정 · 재현 입력은 `DecisionRecord` 에 있고
 - 원장에는 `{"kind": "execution", "decision_ref", "round", "model", "command", "execution"[, "fallback"]}` 줄로 남고, `handle()` 의 `executions` 에도 담긴다.
 - 대조: `python3 eval/sensor_contrast.py`(바꾸기 전후의 L0 를 Sensor 에 넣어 `execution_health` 등을 견준다) · `python3 eval/executor_contrast.py`.
 
+**런타임이 Health VERIFY 를 부른다 (`ms/verify.py`, 선택 의존 · CMD-M23 · BD-99 · BD-101 · BD-108 §5).** 판정은 기록만 한다 -- 결정에 되먹이지 않는다.
+- 언제:
+  - (a) 실행기가 실행한 명령의 관측을 상태 관리자에 넣은 **직후**
+  - (b) 창이 닫힐 때(`issued_at + window_ms`). Runtime 이 요청마다 먼저 `close_windows()` 를 부르고, 바깥에서도 부를 수 있다. (a) 가 PENDING 이면 (b) 에서 한 번 더 판정한다(final).
+- 사후조건 · 창은 행동 명세(ActionSpec)에 있다. 도구 정의 JSON 의 `postcondition` · `window_ms` 가 `ActionSpec.from_tool` 로 간다. 없으면 NO_SPEC 다.
+  예시 세계(`ms/examples/datacenter.json`)에는 달지 않았다 -- F2b 세계(`eval/worlds/datacenter36.json`)가 그 파일에서 지어지는 사전등록 산출물이라서다. 시험의 대본 세계가 `throttle` 에 `throttled == true` · 60 s 를 단다.
+- 읽기:
+  - `$target` 이 푸는 MS 세계의 실체 → 상태 관리자를 state-export `read` 꼴로 읽는 어댑터(`state_reads`): 값 · OBSERVED/DERIVED · FRESH/STALE(ttl) · 관측 시각 ms.
+  - `$run.*` · `subjects` → `Runtime(run_state=…)`(Sensor state-export 를 꽂을 이음매). 없으면 그 절은 UNRESOLVED_ENTITY 다.
+- `outcome` 은 명령과 같은지 확인하는 데만 넘기고 판정에 쓰지 않는다. `outcome_ref` 는 런타임이 모른다(None).
+- 원장 `{"kind": "verification", "decision_ref", "when": "after_execute" | "window_close", "record": VerificationRecord}`. `handle()` 의 `verifications` 에도 담긴다.
+
 **도구 명세 · 술어 · 인자 검사는 action 의 한 벌이다 (BD-108 · BD-111).** action(`action-contract`)은 **필수 의존**이고 pyproject 에
 커밋 sha 로 고정한다(guard · health 와 같은 sha).
 - `ToolRegistry` 는 도구 정의(JSON)를 `ActionSpec.from_tool` 로 읽는다. ToolSpec 은 그 투영(`to_ms_tool`)에 MS 실행 쪽 결합(handler ·
