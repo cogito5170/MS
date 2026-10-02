@@ -53,6 +53,7 @@ class AdaptiveContext:
         3. task_complexity=HIGH 면 DROP · DEFER 를 끄고 예산을 ×0.75 밑으로 안 내린다
     """
     version = "ctx-adaptive-1"
+    high_cuts = True          # 압력 HIGH 에서 DROP · DEFER 까지 하나
 
     def plan(self, state: dict, base: dict) -> dict:
         p = dict(BASE_CONTEXT, **base)
@@ -62,9 +63,12 @@ class AdaptiveContext:
             return {"version": self.version, "params": p, "reasons": ["품질 우선: " + ", ".join(q) + " -> 줄이지 않는다"]}
         reasons = []
         pressure = max(_lv(state, "token_budget_pressure"), _lv(state, "context_pressure"))
-        if pressure == 2:
+        if pressure == 2 and self.high_cuts:
             p.update(budget_chars=int(b0 * 0.5), compress=True, drop=True, defer_priority_min=2)
             reasons.append("압력 HIGH -> 예산 ×0.5 · COMPRESS · DROP · DEFER(우선순위>=2)")
+        elif pressure == 2:
+            p.update(budget_chars=int(b0 * 0.5), compress=True)
+            reasons.append("압력 HIGH -> 예산 ×0.5 · COMPRESS (DROP · DEFER 안 함)")
         elif pressure == 1:
             p.update(budget_chars=int(b0 * 0.75), compress=True)
             reasons.append("압력 MEDIUM -> 예산 ×0.75 · COMPRESS")
@@ -150,27 +154,41 @@ class ExplicitProvider(ProviderPolicy):
                 "reason": "요청이 명시" if request.get("provider") else "기본값", "requested": request.get("provider")}
 
 
-CONTEXT_SELECTORS = {c.version: c for c in (FixedContext(), AdaptiveContext())}
+class AdaptiveContext2(AdaptiveContext):
+    """ctx-adaptive-2 (사전등록 eval/PREREG_F2_꺼냄과지연.md 에서 정의를 고정): ctx-adaptive-1 과 모든 규칙이 같고, 압력 HIGH 에서
+    DROP · DEFER 를 하지 않는다(예산 ×0.5 · COMPRESS 만). 덜 자르면 꺼냄과 지연이 주는가를 재려는 칸이다."""
+    version = "ctx-adaptive-2"
+    high_cuts = False
+
+
+CONTEXT_SELECTORS = {c.version: c for c in (FixedContext(), AdaptiveContext(), AdaptiveContext2())}
 PROMPT_SELECTORS = {c.version: c for c in (FixedPrompt(), AdaptivePrompt())}
 
 
 def replay(policy_record: dict) -> dict:
-    """결정 기록(ms/decision_record.py -- 상태 · 판본 · 입력)으로 계획을 다시 계산한다. 같으면 {"ok": True}."""
+    """결정 기록(ms/decision_record.py -- 상태 · 판본 · 입력)으로 계획을 다시 계산한다. 같으면 {"ok": True}.
+
+    재현하는 것은 **정책**(상태 -> 계획)이다. 상태 자체는 다시 계산하지 않는다 -- 원 측정은 결정 기록에 없다. 그래서 상태를 낸
+    모형의 판본(`state_model`)을 결과에 붙이고, 지금 판본과 같은지(`state_model_current`)를 적는다. 사용 모형이 바뀌면
+    (예: usage-model-3 -> 4, PC-03) 옛 기록도 정책은 그대로 재현되지만, **다른 판본의 상태 위에서 낸 결정**으로 갈라 읽어야 한다."""
+    from .usage_model import MODEL_VERSION
     st = policy_record["state"]
+    model = st.get("model_version")
+    marks = {"state_model": model, "state_model_current": model == MODEL_VERSION}
     out, ok = {}, True
     c = policy_record["context_policy"]
     sel = CONTEXT_SELECTORS.get(c["version"])
     if sel is None:
-        return {"ok": False, "why": f"모르는 맥락 정책 판본 {c['version']}"}
+        return {"ok": False, "why": f"모르는 맥락 정책 판본 {c['version']}", **marks}
     again = sel.plan(st, policy_record["inputs"]["base_context"])
     out["context"] = again["params"] == c["params"]
     p = policy_record["prompt_policy"]
     psel = PROMPT_SELECTORS.get(p["version"])
     if psel is None:
-        return {"ok": False, "why": f"모르는 프롬프트 정책 판본 {p['version']}"}
+        return {"ok": False, "why": f"모르는 프롬프트 정책 판본 {p['version']}", **marks}
     out["prompt"] = psel.plan(st)["plan"] == p["plan"]
     pv = policy_record["provider_policy"]
     if pv["version"] == ExplicitProvider.version:
         out["provider"] = pv["provider"] == (pv.get("requested") or policy_record["inputs"]["default_provider"])
     ok = all(out.values())
-    return {"ok": ok, **out}
+    return {"ok": ok, **out, **marks}

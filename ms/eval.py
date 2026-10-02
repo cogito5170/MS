@@ -7,6 +7,7 @@
     D    claude          adaptive         fixed
     E    openai          adaptive         adaptive
     F    claude          adaptive         adaptive
+    G    claude          adaptive2        fixed        (사전등록 PREREG_F2_꺼냄과지연.md: 압력 HIGH 에서 DROP · DEFER 안 함)
 
 provider 자리에 무엇을 꽂을지는 부르는 쪽이 정한다(`openai:<모형>` · `claude:<모형>` · `claude-cli` · `sim-openai` ...).
 
@@ -30,7 +31,8 @@ import time
 
 from . import predicate
 from .cli import clock_for, load
-from .policy import AdaptiveContext, AdaptivePrompt, FixedContext, FixedPrompt
+from .policy import AdaptiveContext, AdaptiveContext2, AdaptivePrompt, FixedContext, FixedPrompt
+from . import usage_model as U
 from .providers import make_provider
 from .runtime import Runtime
 from .usage_model import install
@@ -38,11 +40,15 @@ from .manager import StateManager
 
 CONFIGS = {"A": ("openai", "fixed", "fixed"), "B": ("claude", "fixed", "fixed"),
            "C": ("openai", "adaptive", "fixed"), "D": ("claude", "adaptive", "fixed"),
-           "E": ("openai", "adaptive", "adaptive"), "F": ("claude", "adaptive", "adaptive")}
+           "E": ("openai", "adaptive", "adaptive"), "F": ("claude", "adaptive", "adaptive"),
+           "G": ("claude", "adaptive2", "fixed")}
+CONTEXT = {"fixed": FixedContext, "adaptive": AdaptiveContext, "adaptive2": AdaptiveContext2}
 PAIRS = [("A", "C", "적응 맥락(openai)"), ("B", "D", "적응 맥락(claude)"),
-         ("C", "E", "적응 프롬프트 더함(openai)"), ("D", "F", "적응 프롬프트 더함(claude)")]
+         ("C", "E", "적응 프롬프트 더함(openai)"), ("D", "F", "적응 프롬프트 더함(claude)"),
+         ("D", "G", "덜 자르는 적응 맥락(claude)"), ("B", "G", "덜 자르는 적응 맥락 대 고정(claude)")]
 METRICS = ("input_tokens", "uncached_input_tokens", "output_tokens", "total_tokens", "total_ms", "retries", "cost_usd",
-           "rationale_chars")
+           "rationale_chars", "retrievals", "llm_calls")
+LOTO = ("retrievals", "total_ms")     # 사소한 설명 S1: 과업 하나씩 빼고 다시 낸다
 DELTA = 0.05          # 품질 비열등 한계(사전등록)
 
 
@@ -78,7 +84,7 @@ def _world(tasks_file: dict, task: dict, clock):
 class Lane:
     """한 칸 · 한 반복 = 한 세션. 세션의 사용 상태가 과업을 건너 이어진다."""
 
-    def __init__(self, letter, rep, slots, tasks_file, provider_kw=None, layout=None, fresh=None):
+    def __init__(self, letter, rep, slots, tasks_file, provider_kw=None, layout=None, fresh=None, state_reader=None):
         slot, self.cmode, self.pmode = CONFIGS[letter]
         self.pname, model = parse_slot(slots[slot])
         self.provider = make_provider(self.pname, model, **(provider_kw or {}).get(self.pname, {}))
@@ -89,13 +95,15 @@ class Lane:
         install(self.usage)
         self.sess, self.opened = f"{letter}-r{rep}", False
         self.layout, self.fresh = layout, fresh          # fresh: 이 평가 실행의 표지(None 이면 안 붙임)
+        self.reader = state_reader(self.usage) if state_reader else None    # 상태 읽기(예: DC). None 이면 usage_model.snapshot
 
     def run_task(self, task, log=print) -> dict:
         tf, row = self.tf, None
         for attempt in (0, 1):
             spec, world, reg = _world(tf, task, self.clock)
             rt = Runtime(world, reg, {self.pname: self.provider}, grants=tf.get("grants", ()),
-                         context_selector=AdaptiveContext() if self.cmode == "adaptive" else FixedContext(),
+                         context_selector=CONTEXT[self.cmode](),
+                         state_reader=self.reader,
                          prompt_selector=AdaptivePrompt() if self.pmode == "adaptive" else FixedPrompt(),
                          base_context=tf.get("base_context"), max_rounds=tf.get("max_rounds", 4),
                          usage_manager=self.usage, prices=tf.get("prices"), prompt_layout=self.layout)
@@ -112,6 +120,7 @@ class Lane:
                 rt.evaluation(rec["run"]["run_id"], ok)
             if attempt == 0:
                 row = _row(self.letter, self.rep, task, rec, out["decision"], out["result"], ok)
+                row["dc_diff"] = getattr(self.reader, "diff", None)       # S5: DC 상태가 snapshot 과 다른 상태 이름
                 log(f"  {self.letter} r{self.rep} {task['id']:<18} {'성공' if ok else '실패'} "
                     f"in={rec['tokens']['input_tokens']} 캐시={rec['tokens']['cached_input_tokens']} "
                     f"ms={rec['latency']['total_ms']:.0f} arbiter={out['decision']['arbiter_decision']['all']}")
@@ -127,7 +136,7 @@ class Lane:
 
 
 def run_all(configs, slots, tasks_file, reps, provider_kw=None, order="interleaved", seed=0, log=print,
-            layout=None, fresh=None) -> dict:
+            layout=None, fresh=None, state_reader=None) -> dict:
     """order=interleaved: 반복마다 · 과업마다 칸 순서를 씨앗 고정 난수로 섞는다. 앞 칸이 쓴 provider 캐시를 늘 같은 칸이
     읽는 치우침을 줄인다(재측정에서 실제로 났다). 그래도 **같은 지시문을 쓰는 칸끼리는 캐시를 나눠 쓴다** -- 그래서
     캐시 안 된 입력(`uncached_input_tokens`)도 따로 비교한다. order=blocked: 칸마다 통째로(예전 방식)."""
@@ -136,12 +145,12 @@ def run_all(configs, slots, tasks_file, reps, provider_kw=None, order="interleav
     if order == "blocked":
         for c in configs:
             for rep in range(reps):
-                lane = Lane(c, rep, slots, tasks_file, provider_kw, layout, fresh)
+                lane = Lane(c, rep, slots, tasks_file, provider_kw, layout, fresh, state_reader)
                 for task in tasks_file["tasks"]:
                     rows_by[c].append(lane.run_task(task, log))
         return rows_by
     for rep in range(reps):
-        lanes = {c: Lane(c, rep, slots, tasks_file, provider_kw, layout, fresh) for c in configs}
+        lanes = {c: Lane(c, rep, slots, tasks_file, provider_kw, layout, fresh, state_reader) for c in configs}
         for i, task in enumerate(tasks_file["tasks"]):
             seq = list(configs)
             rng.shuffle(seq)
@@ -174,9 +183,12 @@ def _row(letter, rep, task, rec, dec, result, ok) -> dict:
             "recovered": bool(ok) if any(v == "DENY" for v, _ in decisions) else None,
             "state_known": any(v is not None for k, v in st.items() if k != "model_version"),
             "context_plan": dec["context_policy"]["reasons"], "prompt_plan": dec["prompt_policy"]["reasons"],
-            "unsupported": rec["unsupported"], "outcome": result["outcome"], "simulated": rec["run"]["simulated"],
+            "unsupported": rec["unsupported"], "outcome": result["outcome"], "simulated": rec["run"]["simulated"], "model": rec["run"]["model"],
             "rationale_chars": _mean(rats), "prefix_hashes": prefixes, "prompt_template": dec["prompt_policy"].get("template"),
-            "instruction_mode": dec["prompt_policy"]["plan"]["instruction_mode"]}
+            "instruction_mode": dec["prompt_policy"]["plan"]["instruction_mode"],
+            "context_version": dec["context_policy"]["version"],
+            "pressure_high": any(x.startswith("압력 HIGH") for x in dec["context_policy"]["reasons"]),   # S4 동작점
+            "state_source": dec.get("state_source", {}).get("kind")}
 
 
 def _mean(xs):
@@ -203,7 +215,11 @@ def summarize(rows: list) -> dict:
             "arbiter_deny_rate": (sum(r["denies"] for r in rows) / calls) if calls else None,
             "arbiter_recovery_rate": _mean([float(r["recovered"]) for r in with_deny]),
             "runs_with_deny": len(with_deny),
-            "distinct_prefixes": len({h for r in rows for h in r.get("prefix_hashes") or []})}
+            "distinct_prefixes": len({h for r in rows for h in r.get("prefix_hashes") or []}),
+            "pressure_high_runs": sum(1 for r in rows if r.get("pressure_high")),
+            "dc_differs_from_snapshot": sum(1 for r in rows if r.get("dc_diff")),
+            "dc_diff_states": sorted({k for r in rows for k in r.get("dc_diff") or []}),
+            "models": sorted({str(r.get("model")) for r in rows})}
 
 
 def _per_task(rows, metric):
@@ -269,10 +285,27 @@ def compare(rows_by: dict) -> list:
             _per_task([r for r in b if r["task"] in okt], "input_tokens")
         d = [pb[t] - pa[t] for t in sorted(set(pa) & set(pb))]
         item["input_tokens_success_only"] = {"diff": statistics.fmean(d) if d else None, "ci95": bootstrap(d)}
+        item["leave_one_task_out"] = {m: _loto(a, b, m) for m in LOTO}
+        item["adaptive_pressure_high_runs"] = sum(1 for r in b if r.get("pressure_high"))
         item["adaptive_state_known_runs"] = sum(1 for r in b if r["state_known"])
         item["adaptive_runs"] = len(b)
         out.append(item)
     return out
+
+
+def _loto(a, b, metric) -> dict:
+    """S1: 과업을 하나씩 빼고 짝 차의 평균을 다시 낸다. 한 과업을 뺐을 때 부호가 바뀌거나 0 이 되면 그 과업의 일이다."""
+    pa, pb = _per_task(a, metric), _per_task(b, metric)
+    common = sorted(set(pa) & set(pb))
+    full = statistics.fmean([pb[t] - pa[t] for t in common]) if common else None
+    out = {}
+    for drop in common:
+        d = [pb[t] - pa[t] for t in common if t != drop]
+        out[drop] = statistics.fmean(d) if d else None
+    sign = lambda v: (v > 0) - (v < 0)
+    flips = [t for t, v in out.items() if v is not None and full is not None and sign(v) != sign(full)]
+    return {"all": full, "without": out, "sign_changes_when_dropped": flips,
+            "per_task": {t: pb[t] - pa[t] for t in common}}
 
 
 def report_md(rep: dict) -> str:
@@ -297,12 +330,23 @@ def report_md(rep: dict) -> str:
                  f"{f(s['output_tokens'], 0)} | {f(s['total_tokens'], 0)} | "
                  f"{f(s['total_ms_median'], 0)} | {f(s['cost_usd'], 4)} | {s['tool_calls']} | {s['retrievals']} | "
                  f"{f(s['arbiter_deny_rate'], 2)} | {f(s['arbiter_recovery_rate'], 2)} |")
+    L += ["", "## 동작점 · 상태 읽기 (사소한 설명 S4 · S5 · S6)", "",
+          f"상태 읽기: {rep.get('state_reader') or 'usage_model.snapshot'}", "",
+          "| 칸 | 실행 | 압력 HIGH 계획 | DC 상태 ≠ snapshot (실행 · 상태) | 모형 |", "|---|---|---|---|---|"]
+    for c, s in rep["summary"].items():
+        L.append(f"| {c} | {s['runs']} | {s.get('pressure_high_runs')} | {s.get('dc_differs_from_snapshot')} "
+                 f"{s.get('dc_diff_states') or ''} | "
+                 f"{', '.join(s.get('models') or [])} |")
     L += ["", "## 짝 비교(사전등록 판정)", ""]
     for c in rep["comparisons"]:
         q = c["quality"]
         L.append(f"### {c['pair']} -- {c['what']}")
         L.append(f"- 품질: 성공률 차 {f(q['diff'], 3)} 구간 {q['ci95']} -> **{q['verdict']}** · 안전 {'통과' if c['safety_ok'] else '**실격**'}")
-        L.append(f"- 적응 칸에서 상태가 정해진 실행 {c['adaptive_state_known_runs']}/{c['adaptive_runs']}")
+        L.append(f"- 적응 칸에서 상태가 정해진 실행 {c['adaptive_state_known_runs']}/{c['adaptive_runs']} · "
+                 f"압력 HIGH 계획으로 돈 실행 {c.get('adaptive_pressure_high_runs')}/{c['adaptive_runs']} (S4 동작점)")
+        for m, lo in (c.get("leave_one_task_out") or {}).items():
+            L.append(f"- S1 {m}: 과업별 차 " + " · ".join(f"{t} {f(v, 1)}" for t, v in lo["per_task"].items())
+                     + f" · 하나 빼면 부호가 바뀌는 과업: {lo['sign_changes_when_dropped'] or '없음'}")
         for m, v in c["metrics"].items():
             k = 5 if m == "cost_usd" else 1
             L.append(f"- {m}: 고정 {f(v['fixed'], k)} -> 적응 {f(v['adaptive'], k)} · 차 {f(v['diff'], k)} 구간 "
@@ -311,9 +355,44 @@ def report_md(rep: dict) -> str:
     return "\n".join(L)
 
 
+def dc_state_reader():
+    """DC(cogito5170/DC)의 MSStateReader 를 레인마다 하나씩 짓는 공장. DC 는 선택 의존이다 -- 경로는 MS_DC_PATH(기본 ../DC).
+    S5: 읽을 때마다 같은 세션의 usage_model.snapshot 과 견주어 다른 상태 이름을 `diff` 에 남긴다. 평가의 시계가 멈춰 있어
+    낡음 때문에 갈리지는 않는다. 다만 DC 의 목적 context_runtime(purpose-cr-1)은 CR 선택기가 읽는 일곱 상태만 투영한다 --
+    tool_churn 은 DC 길에서 늘 None 이다(어느 선택기도 그것을 안 읽는다)."""
+    import os
+    import subprocess
+    import sys
+    path = os.environ.get("MS_DC_PATH", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "DC"))
+    if os.path.isdir(os.path.join(path, "dc")) and path not in sys.path:
+        sys.path.insert(0, path)
+    try:
+        from dc import DecisionContextBuilder, MSStateReader, MSUsageSource
+    except ImportError as e:
+        raise ImportError(f"state_reader=dc 인데 DC 를 못 읽는다({e}) -- MS_DC_PATH 에 cogito5170/DC 를 두어라") from e
+    try:
+        head = subprocess.run(["git", "-C", path, "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
+                              timeout=10).stdout.strip() or None
+    except Exception:
+        head = None
+
+    class Reader:
+        def __init__(self, usage):
+            self.inner = MSStateReader(DecisionContextBuilder([MSUsageSource(usage, U.MODEL_VERSION)]), "context_runtime")
+            self.diff = None
+
+        def __call__(self, um, sid):
+            out = self.inner(um, sid)
+            snap = U.snapshot(um, sid)
+            self.diff = [k for k in U.STATES if out["state"].get(k) != snap.get(k)]
+            return out
+
+    return Reader, {"kind": "dc", "path": os.path.abspath(path), "commit": head, "purpose": "context_runtime"}
+
+
 def evaluate(tasks_path: str, slots: dict, configs=("A", "B", "C", "D", "E", "F"), reps: int = 3,
              provider_kw=None, order: str = "interleaved", seed: int = 0, log=print, layout: "str | None" = None,
-             fresh: bool = False) -> dict:
+             fresh: bool = False, state_reader: "str | None" = None, prereg: str = "eval/PREREG_적응정책.md") -> dict:
     """fresh: 실행마다 다른 표지를 시스템 글 **바로 뒤**(사용자 글 맨 앞)에 붙인다. 같은 과업을 한 시간 안에 되풀이하면
     provider 가 프롬프트 **전체**를 캐시에서 읽는다(재측정 2 의 B · D: 99.9%). 진짜 쓰임에서는 상태가 매번 달라 앞부분
     (시스템 글)만 캐시된다 -- fresh 가 그것을 흉내 낸다."""
@@ -329,7 +408,10 @@ def evaluate(tasks_path: str, slots: dict, configs=("A", "B", "C", "D", "E", "F"
     layout = layout or DEFAULT_LAYOUT
     stamp = time.strftime("%Y%m%dT%H%M%S") if fresh else None
     log(f"칸 {', '.join(use)} · 반복 {reps} · 순서 {order}(씨앗 {seed}) · 배치 {layout} · fresh {bool(fresh)}")
-    rows_by = run_all(use, slots, tf, reps, provider_kw, order, seed, log, layout, stamp)
+    reader, reader_info = (dc_state_reader() if state_reader == "dc" else (None, None))
+    if state_reader not in (None, "dc"):
+        raise ValueError(f"모르는 state_reader {state_reader!r} (dc 만)")
+    rows_by = run_all(use, slots, tf, reps, provider_kw, order, seed, log, layout, stamp, reader)
     caps = {}
     for c in use:
         slot = CONFIGS[c][0]
@@ -344,8 +426,8 @@ def evaluate(tasks_path: str, slots: dict, configs=("A", "B", "C", "D", "E", "F"
         note.append("claude-cli 는 Claude Code 하네스가 붙어 API 의 Claude 와 같지 않다(사전등록: B · D · F 가 아니라 따로)")
     from .usage_model import MODEL_VERSION
     return {"tasks_file": tasks_path, "reps": reps, "order": order, "seed": seed, "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "layout": layout, "fresh": bool(fresh),
+            "layout": layout, "fresh": bool(fresh), "state_reader": reader_info,
             "slots": slots, "versions": {"usage_model": MODEL_VERSION, "tasks": tf.get("version", "datacenter-tasks-1"), "prompt_text": TEMPLATE_VERSIONS[layout]},
             "capabilities": caps, "not_evidence": " / ".join(note),
             "summary": {c: summarize(r) for c, r in rows_by.items()}, "comparisons": compare(rows_by),
-            "rows": [r for c in rows_by for r in rows_by[c]], "prereg": "eval/PREREG_적응정책.md"}
+            "rows": [r for c in rows_by for r in rows_by[c]], "prereg": prereg}

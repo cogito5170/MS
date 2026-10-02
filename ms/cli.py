@@ -11,6 +11,7 @@
                        [--context adaptive] [--prompt adaptive] [--stream] [--json]
     python3 -m ms eval --tasks eval/tasks/datacenter.json --openai openai:<모형> --claude claude:claude-opus-5-5
                        [--configs A,B,C,D,E,F] [--reps 3] [--out eval/results/이름]
+                       [--state-reader dc] [--prereg eval/PREREG_….md]      (F2: --configs B,D,G)
 
 SPEC 은 JSON: models · relationships · entities · edges · tools · queries · policy · grants · (선택) now.
 `now` 가 있으면 시계를 그 값에 고정한다(예시 · 재현용). 없으면 지금 시각.
@@ -123,6 +124,8 @@ def main(argv=None):
                    help="interleaved: 과업마다 칸 순서를 섞는다(provider 캐시 치우침을 줄인다)")
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--layout", choices=("stable_prefix", "legacy"), help="프롬프트 배치(기본 stable_prefix)")
+    s.add_argument("--state-reader", choices=("dc",), help="상태를 DC 결정 문맥으로 읽는다(MS_DC_PATH, 기본 ../DC)")
+    s.add_argument("--prereg", default="eval/PREREG_적응정책.md", help="이 실행이 따르는 사전등록 문서(보고에 적힌다)")
     s.add_argument("--fresh", action="store_true",
                    help="실행마다 다른 표지를 시스템 글 뒤에 붙여, 되풀이한 과업이 프롬프트 전체를 캐시에서 읽지 않게 한다")
     for name in ("demo", "ingest", "context", "run"):
@@ -220,7 +223,8 @@ def _eval(a):
     from .eval import evaluate, report_md
     slots = {k: v for k, v in (("openai", a.openai), ("claude", a.claude)) if v}
     rep = evaluate(a.tasks, slots, tuple(c.strip() for c in a.configs.split(",") if c.strip()), a.reps,
-                   order=a.order, seed=a.seed, layout=a.layout, fresh=a.fresh)
+                   order=a.order, seed=a.seed, layout=a.layout, fresh=a.fresh, state_reader=a.state_reader,
+                   prereg=a.prereg)
     md = report_md(rep)
     if a.out:
         with open(a.out + ".json", "w", encoding="utf-8") as f:
