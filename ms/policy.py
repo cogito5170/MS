@@ -233,14 +233,6 @@ def undecided(selector, state: dict) -> bool:
     return state.get("token_budget_pressure") is None and state.get("context_pressure") is None
 
 
-def undecided_keys(selector) -> list:
-    """`undecided` 가 읽는 상태 이름 -- 기본 결정(규칙)이 본 것. ActionIntent.used_keys 로 간다(CMD-M15)."""
-    if isinstance(selector, FixedContext):
-        return []
-    quality = ["answer_reliability", "correction_rate"] if isinstance(selector, _StrictQuality) else []
-    return quality + ["token_budget_pressure", "context_pressure"]
-
-
 def default_context_plan(action: str, base: dict) -> dict:
     """DC 가 준 기본 결정 이름 -> 맥락 계획. 모르는 이름이면 거절한다(지어내지 않는다)."""
     sel = DEFAULT_CONTEXT_ACTIONS.get(action)

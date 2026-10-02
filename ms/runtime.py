@@ -40,8 +40,7 @@ from .cr import VERSION as CR_VERSION, ContextRuntime
 from .pipeline import Pipeline
 from . import intent, l0
 from .decision_record import DecisionRecord
-from .policy import (BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt, default_context_plan, undecided,
-                     undecided_keys)
+from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt, default_context_plan, undecided
 from .run_telemetry import RunRecord, cost_of
 from .tools import RETRIEVE
 
@@ -109,13 +108,10 @@ class Runtime:
         state, source, supplied = self._read_state(sid, request)
         plan = ContextRuntime.plan(state, self.ctx_sel, self.prompt_sel, self.base_context, self.prompt_layout)
         action = source.get("default_action")
-        rule = None
         if action is not None and undecided(self.ctx_sel, state):
             # BD-76: 규칙이 정해지지 않으면 결정 문맥이 준 기본 결정. 지금 선택기는 그때 이미 고정과 같은 계획을 내므로
             # 보이는 맥락은 그대로다(시험) -- 계획 이유와 판본만 기본 결정으로 남는다
             plan["context_policy"] = default_context_plan(action, self.base_context)
-            rule = {"action": action, "rationale": plan["context_policy"]["reasons"][0],
-                    "keys": undecided_keys(self.ctx_sel)}
         cplan, pplan = plan["context_policy"], plan["prompt_policy"]
         choice = self.provider_policy.select(state, request)
         provider = self.providers[choice["provider"]]
@@ -134,7 +130,7 @@ class Runtime:
         total_ms = (self.wall() - t0) * 1000
         dec = pre[0] if pre else self._decision(state, cplan, pplan, choice, res, source)
         rec = self._record(request, choice, provider, res, total_ms, run_id, dec)
-        intents = intent.intents(source, res.rounds, rule)
+        intents = intent.intents(source, res.rounds)
         # 끝 요약: 런타임(MS)이 아는 사실만. 비용은 provider 가 보고했을 때만(가격표 계산은 L0 가 아니다)
         l0rec.run_end(decision_ref=dec.id, terminal_reason=res.outcome, num_turns=len(res.rounds),
                       run_duration_ms=round(total_ms, 3), model=rec.run["model"],

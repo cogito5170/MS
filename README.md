@@ -163,7 +163,8 @@ provider 계획 · 중재 결정 · 재현 입력은 `DecisionRecord` 에 있고
 
 **ActionIntent 를 따로 기록한다 (`ms/intent.py`, shadow · 선택 의존 · CMD-M15 · BD-97).** [cogito5170/action](https://github.com/cogito5170/action)
 의 꼴 `action-contract/1` 이 import 되고 상태를 **DC 로 읽을 때만**(결정 문맥 id 가 있을 때) 낸다.
-- 의도의 칸은 dc_id · `policy="ms-cr@cr-3"` · `author_kind`(LLM 제안이면 `llm`, BD-76 기본 결정이면 `rule`) · used_keys 다.
+- 의도의 칸은 dc_id · `policy="ms-cr@cr-3"` · `author_kind="llm"` · used_keys(`query:<질의 이름>`, BD-100) 다.
+- 의도는 실행기로 갈 도구 행동뿐이다. BD-76 기본 결정(KEEP)은 CR 안의 맥락 결정이라 의도가 아니다(BD-100).
 - 원장에는 `{"kind": "intent", "decision_ref", "round", "intent"}` 줄로 남고, `handle()` 의 `intents` 에도 담긴다.
 - error · none · retrieve 는 의도가 아니다.
 - `Proposal` · 중재 · 결정 기록은 그대로다. 의도는 결정 기록에 넣지 않아서 결정 id 가 안 바뀐다.

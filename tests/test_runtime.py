@@ -1584,7 +1584,7 @@ class ActionIntentShadow(unittest.TestCase):
         self.assertEqual(self.A.ActionIntent.from_dict(json.loads(json.dumps(d))).to_dict(), d)      # 왕복
         self.assertEqual((d["dc_id"], d["policy"], d["author_kind"]), (src["id"], "ms-cr@cr-3", "llm"))
         self.assertEqual((d["action"], d["target"]), ("throttle", "srv07"))
-        self.assertEqual(d["used_keys"], src["queries"])                       # LLM 이 STATE 로 본 질의(상한)
+        self.assertEqual(d["used_keys"], ["query:" + q for q in src["queries"]])   # LLM 이 STATE 로 본 질의(상한, BD-100)
         self.assertEqual([l["kind"] for l in lines], ["decision", "intent", "run"])
         self.assertEqual(lines[1]["decision_ref"], out["decision"]["id"])
         self.assertNotIn("intent", json.dumps(out["decision"]))                # 결정 기록 밖이다 -- id 의 입력이 아니다
@@ -1615,22 +1615,13 @@ class ActionIntentShadow(unittest.TestCase):
                               [(r.get("proposal"), r.get("decision")) for r in o["result"]["rounds"]])
             self.assertEqual(same(off), same(on))
 
-    def test_rule_intent_for_the_default_decision(self):
-        """BD-76 기본 결정을 쓰면 규칙의 의도(author_kind rule)가 판 0 으로 하나. used_keys 는 그 규칙이 읽은 상태다."""
+    def test_default_decision_is_not_an_intent(self):
+        """BD-100: BD-76 기본 결정(KEEP)은 CR 안의 맥락 결정이다 -- 실행기로 갈 행동이 아니므로 의도로 내지 않는다."""
         from ms.policy import AdaptiveContext3
         spec, rt = self._rt(self._fake({"id": "dc-r", "default_action": "KEEP"}), context_selector=AdaptiveContext3())
         out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
-        rule = out["intents"][0]
-        self.assertEqual(rule["round"], 0)
-        d = self.A.ActionIntent.from_dict(rule["intent"]).to_dict()
-        self.assertEqual((d["author_kind"], d["action"], d["target"], d["args"]), ("rule", "KEEP", None, {}))
-        self.assertEqual(d["used_keys"], ["session.answer_reliability", "session.context_pressure",
-                                          "session.correction_rate", "session.token_budget_pressure"])
-        self.assertIn("기본 결정 KEEP", d["rationale"])
-        self.assertEqual([i["intent"]["author_kind"] for i in out["intents"]], ["rule", "llm"])
-        spec, rt = self._rt(self._fake({"id": "dc-r", "default_action": "KEEP"}))          # 고정은 늘 정한다 -- 규칙 의도 없음
-        out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
-        self.assertEqual([i["intent"]["author_kind"] for i in out["intents"]], ["llm"])
+        self.assertIn("기본 결정 KEEP", out["decision"]["context_policy"]["reasons"][0])     # 대조: 기본 결정을 썼다
+        self.assertEqual([(i["intent"]["author_kind"], i["intent"]["action"]) for i in out["intents"]], [("llm", "throttle")])
 
     def test_error_none_and_retrieve_are_not_intents(self):
         """의도가 아닌 셋(PC-19 §2): error(A0) · none · retrieve. DENY 된 진짜 도구 제안은 의도다(Guard 앞의 꼴)."""
