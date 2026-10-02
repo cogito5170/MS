@@ -43,6 +43,9 @@ class CanonicalPrompt:
     output_schema: "dict | None" = None               # None 이면 글 속 JSON
     tool_policy: str = ""                             # 사람이 읽는 한 줄(무엇을 제안해도 되나). WALP 를 바꾸지 않는다
     tools: list = field(default_factory=list)         # 도구 카드 -- 맥락이 제안한 것의 부분집합
+    preamble: str = ""                                # 사용자 글 맨 앞(실행마다 다른 표지 -- 평가의 --fresh)
+    tail: list = field(default_factory=list)          # STATE 뒤에 붙는 계획별 지침(캐시를 지키려고 뒤에 둔다)
+    notes: list = field(default_factory=list)         # 계획이 요청했지만 이 배치에서 적용하지 않은 것
 
     def context_text(self) -> str:
         return "\n".join(json.dumps(c["data"], ensure_ascii=False, separators=(",", ":")) for c in self.context)
@@ -52,9 +55,13 @@ class CanonicalPrompt:
 
     def user_text(self) -> str:
         parts = []
+        if self.preamble:
+            parts.append(self.preamble)
         if self.examples:
             parts.append("EXAMPLES:\n" + "\n".join(f"{e['input']}\n=> {e['output']}" for e in self.examples))
         parts.append(f"STATE:\n{self.context_text()}\n")
+        if self.tail:
+            parts.append("\n".join(self.tail) + "\n")
         return "\n\n".join(parts)
 
     def text(self) -> str:

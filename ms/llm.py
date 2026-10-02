@@ -24,7 +24,9 @@ INSTRUCTIONS = """너는 제안만 한다. 실행은 중재자(WALP ARBITER)가 
 
 
 def build_prompt(ctx) -> str:
-    return f"{INSTRUCTIONS}\n\nSTATE:\n{ctx.render()}\n"
+    """고정 계획 · 기본 배치에서 LLM 이 받는 글(글 하나로 받는 LLM 용)."""
+    from .prompt import PromptPolicy
+    return PromptPolicy().build(ctx).text()
 
 
 @dataclass

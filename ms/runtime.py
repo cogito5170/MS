@@ -27,7 +27,6 @@ from .arbiter import DENY, WalpArbiter
 from .context import ContextPolicy
 from .pipeline import Pipeline
 from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt
-from .prompt import TEMPLATE_VERSION
 from .run_telemetry import RunRecord, cost_of
 from .tools import RETRIEVE
 
@@ -54,9 +53,12 @@ class Runtime:
     def __init__(self, manager, registry, providers: dict, *, grants=(), context_selector=None, prompt_selector=None,
                  provider_policy=None, base_context: "dict | None" = None, prices: "dict | None" = None,
                  ledger_path: "str | None" = None, max_rounds: int = 4, wall=time.perf_counter,
-                 usage_manager=None):
+                 usage_manager=None, prompt_layout: "str | None" = None):
         self.m, self.reg, self.providers = manager, registry, dict(providers)
         self.um = usage_manager or manager
+        from .prompt import DEFAULT_LAYOUT, TEMPLATE_VERSIONS
+        self.prompt_layout = prompt_layout or DEFAULT_LAYOUT
+        self.template_version = TEMPLATE_VERSIONS[self.prompt_layout]
         U.install(self.um)
         self.arbiter = WalpArbiter(registry, grants, clock=manager.clock)
         self.ctx_sel = context_selector or FixedContext()
@@ -77,12 +79,13 @@ class Runtime:
             raise KeyError(f"세션 {request['session']} 이 열리지 않았다(open_session)")
         state = U.snapshot(self.um, sid)
         cplan = self.ctx_sel.plan(state, self.base_context)
-        pplan = dict(self.prompt_sel.plan(state), template=TEMPLATE_VERSION)
+        pplan = dict(self.prompt_sel.plan(state), template=self.template_version, layout=self.prompt_layout)
         choice = self.provider_policy.select(state, request)
         provider = self.providers[choice["provider"]]
         pipe = Pipeline(self.m, self.reg, provider, ContextPolicy(**cplan["params"], version=cplan["version"]),
                         self.arbiter, prompt_plan=pplan["plan"], model=choice.get("model"),
-                        stream=bool(request.get("stream")), tool_mode=request.get("tool_mode", "text"))
+                        stream=bool(request.get("stream")), tool_mode=request.get("tool_mode", "text"),
+                        prompt_layout=self.prompt_layout, preamble=request.get("preamble", ""))
         res = pipe.run(request["task"], request.get("queries", ()), max_rounds=request.get("max_rounds", self.max_rounds))
         total_ms = (self.wall() - t0) * 1000
         rec = self._record(request, sid, state, cplan, pplan, choice, provider, res, total_ms)

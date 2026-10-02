@@ -116,6 +116,9 @@ def main(argv=None):
     s.add_argument("--order", choices=("interleaved", "blocked"), default="interleaved",
                    help="interleaved: 과업마다 칸 순서를 섞는다(provider 캐시 치우침을 줄인다)")
     s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--layout", choices=("stable_prefix", "legacy"), help="프롬프트 배치(기본 stable_prefix)")
+    s.add_argument("--fresh", action="store_true",
+                   help="실행마다 다른 표지를 시스템 글 뒤에 붙여, 되풀이한 과업이 프롬프트 전체를 캐시에서 읽지 않게 한다")
     for name in ("demo", "ingest", "context", "run"):
         s = sub.add_parser(name)
         if name != "demo":
@@ -211,7 +214,7 @@ def _eval(a):
     from .eval import evaluate, report_md
     slots = {k: v for k, v in (("openai", a.openai), ("claude", a.claude)) if v}
     rep = evaluate(a.tasks, slots, tuple(c.strip() for c in a.configs.split(",") if c.strip()), a.reps,
-                   order=a.order, seed=a.seed)
+                   order=a.order, seed=a.seed, layout=a.layout, fresh=a.fresh)
     md = report_md(rep)
     if a.out:
         with open(a.out + ".json", "w", encoding="utf-8") as f:

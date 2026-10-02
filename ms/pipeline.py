@@ -52,14 +52,16 @@ class RunResult:
 class Pipeline:
     def __init__(self, manager, registry, llm, policy: "ContextPolicy | None" = None,
                  arbiter: "WalpArbiter | None" = None, retrieve_max: int = 20, prompt_plan: "dict | None" = None,
-                 model: "str | None" = None, stream: bool = False, tool_mode: str = "text"):
+                 model: "str | None" = None, stream: bool = False, tool_mode: str = "text",
+                 prompt_layout: "str | None" = None, preamble: str = ""):
         self.m, self.reg = manager, registry
         self.provider = llm if isinstance(llm, LLMProvider) else CallableProvider(llm)
         self.llm = llm
         self.policy = policy or ContextPolicy()
         self.arbiter = arbiter or WalpArbiter(registry, clock=manager.clock)
         self.retrieve_max = retrieve_max
-        self.prompt_policy, self.prompt_plan = PromptPolicy(), prompt_plan
+        self.prompt_policy = PromptPolicy(prompt_layout) if prompt_layout else PromptPolicy()
+        self.prompt_plan, self.preamble = prompt_plan, preamble
         self.model, self.stream, self.tool_mode = model, stream, tool_mode
 
     def context(self, task, queries, retrieved_ids=(), denied=()):
@@ -74,7 +76,7 @@ class Pipeline:
         return self.policy.build(task, [r for r in results if r.name != "retrieved"], offers, retrieved, denied)
 
     def _call(self, ctx):
-        prompt = self.prompt_policy.build(ctx, self.prompt_plan)
+        prompt = self.prompt_policy.build(ctx, self.prompt_plan, self.preamble)
         req = CanonicalRequest(self.model or self.provider.model, prompt, plan_inference(self.prompt_plan or {}),
                                self.tool_mode, self.stream and self.provider.supports_stream)
         resp = self.provider.collect(req) if req.stream else self.provider.generate(req)
@@ -83,7 +85,8 @@ class Pipeline:
         retrieved = [r.payload() for q, r in ctx.kept if q == "retrieved"]
         info = {"provider": resp.provider, "model": resp.model, "finish": resp.finish,
                 "usage": resp.to_dict()["usage"], "ttft_ms": resp.ttft_ms, "inference_ms": resp.inference_ms,
-                "cost_usd": resp.cost_usd, "unsupported": resp.unsupported, "extensions": resp.extensions,
+                "cost_usd": resp.cost_usd, "unsupported": resp.unsupported + prompt.notes,
+                "extensions": resp.extensions,
                 "prompt_chars": len(full), "context_chars": len(ctx_text),
                 "retrieved_chars": len(json.dumps(retrieved, ensure_ascii=False, separators=(",", ":"))) if retrieved
                 else 0, "native_tool_calls": len(resp.tool_calls)}

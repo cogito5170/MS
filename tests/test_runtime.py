@@ -517,7 +517,7 @@ class PromptText(unittest.TestCase):
         rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")})
         rt.open_session("s", {})
         rec = rt.handle({"session": "s", "task": "t", "queries": spec["queries"]})["record"]
-        self.assertEqual(rec["policy"]["prompt_policy"]["template"], TEMPLATE_VERSION)
+        self.assertEqual(rec["policy"]["prompt_policy"]["template"], TEMPLATE_VERSION)   # 기본 배치의 판본
         self.assertTrue(replay(rec["policy"])["ok"])
 
 
@@ -553,6 +553,48 @@ class QualityStateNeedsTwoEvents(unittest.TestCase):
         self.assertEqual(U.MODEL_VERSION, "usage-model-2")
         m = StateManager(clock=Clock())
         self.assertEqual(U.snapshot(m, U.open_session(m, "s", {}))["model_version"], "usage-model-2")
+
+
+class CacheStableLayout(unittest.TestCase):
+    """prompt-text-3: 계획 · 상태가 무엇이든 시스템 글(provider 캐시의 앞부분)은 바이트가 같다."""
+    STATES = ({}, {"token_budget_pressure": "HIGH"}, {"answer_reliability": "LOW", "correction_rate": "HIGH"},
+              {"latency_pressure": "HIGH"}, {"task_complexity": "HIGH"})
+
+    def _systems(self, layout):
+        out = set()
+        for st in self.STATES:
+            for sel in (FixedPrompt(), AdaptivePrompt()):
+                spec, m, reg, pol, *_ = world()
+                p = make_provider("claude", "claude-opus-5-5", api_key="k", transport=Rec(RAW_CLAUDE))
+                pipe = Pipeline(m, reg, p, pol, prompt_plan=sel.plan(st)["plan"], prompt_layout=layout)
+                pipe.run("t", spec["queries"], max_rounds=1)
+                out.add(p.transport.seen[0]["system"])
+        return out
+
+    def test_system_is_identical_across_plans(self):
+        self.assertEqual(len(self._systems("stable_prefix")), 1)
+
+    def test_legacy_layout_varies(self):                         # 대조 -- 이 시험이 헛돌지 않는다
+        self.assertGreater(len(self._systems("legacy")), 1)
+
+    def test_plan_directives_go_after_state(self):
+        spec, m, reg, pol, *_ = world()
+        pr = PromptPolicy().build(ctx_of(spec, m, reg, pol), {"tool_permission": "no_irreversible",
+                                                               "instruction_mode": "concise"}, preamble="run X")
+        u = pr.user_text()
+        self.assertLess(u.index("run X"), u.index("STATE:"))
+        self.assertGreater(u.index("irreversible"), u.index("STATE:"))
+        self.assertTrue(pr.notes and "concise" in pr.notes[0])         # 적용 안 한 것은 적힌다
+
+    def test_concise_not_applied_is_recorded(self):
+        spec, m, reg, *_ = world()
+        rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")}, prompt_selector=AdaptivePrompt())
+        rt.open_session("s", {"token_budget": 10, "context_budget": 10})
+        rt.handle({"session": "s", "task": "t", "queries": spec["queries"]})
+        rec = rt.handle({"session": "s", "task": "t", "queries": spec["queries"]})["record"]
+        self.assertEqual(rec["policy"]["prompt_policy"]["plan"]["instruction_mode"], "concise")
+        self.assertTrue(any("instruction_mode=concise" in u for u in rec["unsupported"]))
+        self.assertEqual(rec["policy"]["prompt_policy"]["template"], "prompt-text-3")
 
 
 class ContextActions(unittest.TestCase):

@@ -60,7 +60,7 @@ def _world(tasks_file: dict, task: dict):
 class Lane:
     """한 칸 · 한 반복 = 한 세션. 세션의 사용 상태가 과업을 건너 이어진다."""
 
-    def __init__(self, letter, rep, slots, tasks_file, provider_kw=None):
+    def __init__(self, letter, rep, slots, tasks_file, provider_kw=None, layout=None, fresh=None):
         slot, self.cmode, self.pmode = CONFIGS[letter]
         self.pname, model = parse_slot(slots[slot])
         self.provider = make_provider(self.pname, model, **(provider_kw or {}).get(self.pname, {}))
@@ -68,6 +68,7 @@ class Lane:
         self.usage = StateManager(clock=time.time)
         install(self.usage)
         self.sess, self.opened = f"{letter}-r{rep}", False
+        self.layout, self.fresh = layout, fresh          # fresh: 이 평가 실행의 표지(None 이면 안 붙임)
 
     def run_task(self, task, log=print) -> dict:
         tf, row = self.tf, None
@@ -77,12 +78,13 @@ class Lane:
                          context_selector=AdaptiveContext() if self.cmode == "adaptive" else FixedContext(),
                          prompt_selector=AdaptivePrompt() if self.pmode == "adaptive" else FixedPrompt(),
                          base_context=tf.get("base_context"), max_rounds=tf.get("max_rounds", 4),
-                         usage_manager=self.usage, prices=tf.get("prices"))
+                         usage_manager=self.usage, prices=tf.get("prices"), prompt_layout=self.layout)
             if not self.opened:
                 rt.open_session(self.sess, tf["budgets"])
                 self.opened = True
             text = task["task"] if attempt == 0 else f"{task['task']}\n사용자 고침: {task['correction']}"
-            req = {"session": self.sess, "task": text, "queries": task.get("queries") or spec["queries"],
+            pre = f"run {self.fresh}/{self.letter}-r{self.rep}/{task['id']}/{attempt}" if self.fresh else ""
+            req = {"session": self.sess, "task": text, "queries": task.get("queries") or spec["queries"], "preamble": pre,
                    **{k: task[k] for k in ("success", "forbidden", "expect_noop") if k in task}}
             out = rt.handle(req)
             rec = out["record"]
@@ -103,7 +105,8 @@ class Lane:
         return row
 
 
-def run_all(configs, slots, tasks_file, reps, provider_kw=None, order="interleaved", seed=0, log=print) -> dict:
+def run_all(configs, slots, tasks_file, reps, provider_kw=None, order="interleaved", seed=0, log=print,
+            layout=None, fresh=None) -> dict:
     """order=interleaved: 반복마다 · 과업마다 칸 순서를 씨앗 고정 난수로 섞는다. 앞 칸이 쓴 provider 캐시를 늘 같은 칸이
     읽는 치우침을 줄인다(재측정에서 실제로 났다). 그래도 **같은 지시문을 쓰는 칸끼리는 캐시를 나눠 쓴다** -- 그래서
     캐시 안 된 입력(`uncached_input_tokens`)도 따로 비교한다. order=blocked: 칸마다 통째로(예전 방식)."""
@@ -112,12 +115,12 @@ def run_all(configs, slots, tasks_file, reps, provider_kw=None, order="interleav
     if order == "blocked":
         for c in configs:
             for rep in range(reps):
-                lane = Lane(c, rep, slots, tasks_file, provider_kw)
+                lane = Lane(c, rep, slots, tasks_file, provider_kw, layout, fresh)
                 for task in tasks_file["tasks"]:
                     rows_by[c].append(lane.run_task(task, log))
         return rows_by
     for rep in range(reps):
-        lanes = {c: Lane(c, rep, slots, tasks_file, provider_kw) for c in configs}
+        lanes = {c: Lane(c, rep, slots, tasks_file, provider_kw, layout, fresh) for c in configs}
         for i, task in enumerate(tasks_file["tasks"]):
             seq = list(configs)
             rng.shuffle(seq)
@@ -253,7 +256,8 @@ def report_md(rep: dict) -> str:
     if rep["not_evidence"]:
         L += ["> **이 결과는 가설의 증거가 아니다.** " + rep["not_evidence"], ""]
     L += [f"# 평가 -- {rep['tasks_file']} · 반복 {rep['reps']} · 순서 {rep.get('order', 'blocked')}"
-          f"(씨앗 {rep.get('seed')}) · {rep['started']}", "", f"판본: {rep.get('versions')}", "",
+          f"(씨앗 {rep.get('seed')}) · 배치 {rep.get('layout', 'legacy')} · fresh {rep.get('fresh', False)} · {rep['started']}",
+          "", f"판본: {rep.get('versions')}", "",
           "## provider 능력(같다고 가정하지 않는다)", "", "| 자리 | 무엇 | 능력 |", "|---|---|---|"]
     for slot, cap in rep["capabilities"].items():
         L.append(f"| {slot} | {rep['slots'][slot]} | " + " · ".join(f"{k}: {v}" for k, v in cap.items()
@@ -284,7 +288,11 @@ def report_md(rep: dict) -> str:
 
 
 def evaluate(tasks_path: str, slots: dict, configs=("A", "B", "C", "D", "E", "F"), reps: int = 3,
-             provider_kw=None, order: str = "interleaved", seed: int = 0, log=print) -> dict:
+             provider_kw=None, order: str = "interleaved", seed: int = 0, log=print, layout: "str | None" = None,
+             fresh: bool = False) -> dict:
+    """fresh: 실행마다 다른 표지를 시스템 글 **바로 뒤**(사용자 글 맨 앞)에 붙인다. 같은 과업을 한 시간 안에 되풀이하면
+    provider 가 프롬프트 **전체**를 캐시에서 읽는다(재측정 2 의 B · D: 99.9%). 진짜 쓰임에서는 상태가 매번 달라 앞부분
+    (시스템 글)만 캐시된다 -- fresh 가 그것을 흉내 낸다."""
     with open(tasks_path, encoding="utf-8") as fh:
         tf = json.load(fh)
     use = []
@@ -293,8 +301,11 @@ def evaluate(tasks_path: str, slots: dict, configs=("A", "B", "C", "D", "E", "F"
             log(f"[{c}] {CONFIGS[c][0]} 자리가 비었다 -- 건너뛴다")
         else:
             use.append(c)
-    log(f"칸 {', '.join(use)} · 반복 {reps} · 순서 {order}(씨앗 {seed})")
-    rows_by = run_all(use, slots, tf, reps, provider_kw, order, seed, log)
+    from .prompt import DEFAULT_LAYOUT, TEMPLATE_VERSIONS
+    layout = layout or DEFAULT_LAYOUT
+    stamp = time.strftime("%Y%m%dT%H%M%S") if fresh else None
+    log(f"칸 {', '.join(use)} · 반복 {reps} · 순서 {order}(씨앗 {seed}) · 배치 {layout} · fresh {bool(fresh)}")
+    rows_by = run_all(use, slots, tf, reps, provider_kw, order, seed, log, layout, stamp)
     caps = {}
     for c in use:
         slot = CONFIGS[c][0]
@@ -308,9 +319,9 @@ def evaluate(tasks_path: str, slots: dict, configs=("A", "B", "C", "D", "E", "F"
     if cli:
         note.append("claude-cli 는 Claude Code 하네스가 붙어 API 의 Claude 와 같지 않다(사전등록: B · D · F 가 아니라 따로)")
     from .usage_model import MODEL_VERSION
-    from .prompt import TEMPLATE_VERSION
     return {"tasks_file": tasks_path, "reps": reps, "order": order, "seed": seed, "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "slots": slots, "versions": {"usage_model": MODEL_VERSION, "prompt_text": TEMPLATE_VERSION},
+            "layout": layout, "fresh": bool(fresh),
+            "slots": slots, "versions": {"usage_model": MODEL_VERSION, "prompt_text": TEMPLATE_VERSIONS[layout]},
             "capabilities": caps, "not_evidence": " / ".join(note),
             "summary": {c: summarize(r) for c, r in rows_by.items()}, "comparisons": compare(rows_by),
             "rows": [r for c in rows_by for r in rows_by[c]], "prereg": "eval/PREREG_적응정책.md"}
