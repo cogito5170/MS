@@ -1717,7 +1717,8 @@ class GuardShadowWiring(unittest.TestCase):
         self.assertNotIn("guard", json.dumps(out["decision"]))                 # 결정 기록 밖 -- id 의 입력이 아니다
 
     def test_guard_never_decides_execution(self):
-        """끝난 기준 3: Guard 가 SAFE_ACTION(D) 을 내도 Arbiter 의 ALLOW 대로 실행된다. Guard 가 없을 때와 결정 id · 결과가 같다."""
+        """끝난 기준 3: Guard 가 막아도(D -- 판정 값은 Guard 판본에 따른다: G3 SAFE_ACTION · G4 DENY, BD-104) Arbiter 의
+        ALLOW 대로 실행된다. Guard 가 없을 때와 결정 id · 결과가 같다."""
         import itertools
         from unittest import mock
 
@@ -1729,8 +1730,9 @@ class GuardShadowWiring(unittest.TestCase):
                 return rt.handle({"session": "s", "task": "x", "queries": spec["queries"]})
         on = run()
         g = on["guards"][0]
-        self.assertEqual((g["arbiter"], g["guard"]["verdict"], g["guard"]["rule"]), (["ALLOW", "0"], "SAFE_ACTION", "D"))
-        self.assertEqual(on["result"]["outcome"], "executed")
+        self.assertEqual((g["arbiter"], g["guard"]["rule"]), (["ALLOW", "0"], "D"))
+        self.assertNotEqual(g["guard"]["verdict"], "ALLOW")                    # Guard 는 막았다 -- 그래도
+        self.assertEqual(on["result"]["outcome"], "executed")                  # Arbiter 대로 실행됐다
         self.assertEqual(run()["decision"]["id"], on["decision"]["id"])        # 대조: 같은 세계면 같은 id
         with mock.patch.dict(sys.modules, {"guard": None}):
             off = run()
