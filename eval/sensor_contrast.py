@@ -55,11 +55,8 @@ def _sensor(events) -> dict:
 
 
 def fresh_ids():
-    """관측 id 는 프로세스 전역 셈이고 DC provenance(따라서 결정 문맥 id · 결정 id)에 든다(BD-104 의 3). before 는 실행기 시험
-    몇이 중간에 멈춰 셈이 어긋난다 -- 그래서 일(시험 · 묶음 · 대본)마다 처음부터 센다. 두 쪽이 같은 일을 같은 셈에서 시작한다."""
-    import itertools
-    import ms.telemetry
-    ms.telemetry._ids = itertools.count(1)
+    """CMD-M26 뒤로는 할 일이 없다 -- 관측 id 는 받는 State Manager 의 셈이라 일마다 새 세계면 처음부터다. 예전 하니스가
+    프로세스 전역 셈을 되감던 자리(BD-104 의 3)라 이름만 남긴다."""
 
 
 def one_pass(mode: str) -> list:

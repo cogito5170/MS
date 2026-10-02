@@ -36,14 +36,16 @@ def available() -> bool:
     return _l0() is not None
 
 
-def recorder(run_id: str, ledger_path=None, sink=None, source: str = "inproc:ms"):
+def recorder(run_id: str, ledger_path=None, sink=None, source: str = "inproc:ms", wall=None):
+    """wall: 사건 시각(unix ms)을 낼 시계 -- Runtime 이 자기 시계를 준다(CMD-M26). 없으면 Recorder 의 기본(벽시계)."""
     if ledger_path is None and sink is None:
         return NullRecorder()
     t = _l0()
     if t is None:
         raise ImportError("L0 Telemetry 가 없다 -- pip install git+https://github.com/cogito5170/Telemetry")
     from telemetry.ledger import JsonlSink
-    return t.Recorder(run_id, sink if sink is not None else JsonlSink(ledger_path), source=source)
+    return t.Recorder(run_id, sink if sink is not None else JsonlSink(ledger_path), source=source,
+                      **({"wall": wall} if wall is not None else {}))
 
 
 class _Nothing:

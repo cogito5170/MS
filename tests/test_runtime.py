@@ -369,13 +369,13 @@ class ProposalBoundary(unittest.TestCase):
 
     def test_tool_result_reenters_as_telemetry(self):
         spec, m, reg, pol, arb, _ = world()
-        seen = []
+        seen, got = [], []
         orig = m.ingest
-        m.ingest = lambda t: seen.append(t) or orig(t)
+        m.ingest = lambda t: seen.append(t) or got.append(orig(t)) or got[-1]
         Pipeline(m, reg, SpyProvider([{"tool": "throttle", "target": "srv07", "args": {"level": 1}}]), pol, arb) \
             .run("t", spec["queries"])
         self.assertEqual([(t.source, t.signal) for t in seen], [("tool:throttle", "throttle_ack")])
-        self.assertEqual(m.graph.nodes["srv07"].props["throttled"].src, seen[0].id)
+        self.assertEqual(m.graph.nodes["srv07"].props["throttled"].src, got[0].telemetry)    # id 는 받는 관리자가 매긴다
 
 
 # -- 8. Prompt Policy 는 Arbiter 를 못 바꾼다 ----------------------------------------------------------------------
@@ -1725,11 +1725,9 @@ class GuardShadowWiring(unittest.TestCase):
         from unittest import mock
 
         def run():
-            # 텔레메트리 id 는 프로세스 전역 셈이고 DC provenance(따라서 결정 문맥 id)에 든다 -- 세계마다 처음부터 센다
-            with mock.patch("ms.telemetry._ids", itertools.count(1)):
-                spec, rt = self._rt(ScriptedLLM([{"tool": "reboot", "target": "srv07", "rationale": "x"}]),
-                                    grants=("reboot",))
-                return rt.handle({"session": "s", "task": "x", "queries": spec["queries"]})
+            # 관측 id 는 받는 관리자의 셈이다(CMD-M26) -- 셈을 손으로 되감지 않아도 같은 세계면 같은 결정 id 다
+            spec, rt = self._rt(ScriptedLLM([{"tool": "reboot", "target": "srv07", "rationale": "x"}]), grants=("reboot",))
+            return rt.handle({"session": "s", "task": "x", "queries": spec["queries"]})
         on = run()
         g = on["guards"][0]
         self.assertEqual((g["arbiter"], g["guard"]["rule"]), (["ALLOW", "0"], "D"))
@@ -1869,10 +1867,9 @@ class ExecutorWiring(unittest.TestCase):
         def run(tool, target, a):
             calls.append(tool.name)
             return real_run(tool, target, a)
-        with mock.patch("ms.telemetry._ids", itertools.count(1)), mock.patch.object(ToolSpec, "run", run):
+        with mock.patch.object(ToolSpec, "run", run):
             on, ev_on = self._l0()
-        with mock.patch("ms.telemetry._ids", itertools.count(1)):
-            off, ev_off = self._l0(off=True)
+        off, ev_off = self._l0(off=True)
         from telemetry import check
         types_on, types_off = [e["type"] for e in ev_on], [e["type"] for e in ev_off]
         self.assertEqual(calls, ["throttle"])
@@ -1906,10 +1903,8 @@ class ExecutorWiring(unittest.TestCase):
 
         def boom(target, args):
             raise RuntimeError("팬이 멈췄다")
-        with mock.patch("ms.telemetry._ids", itertools.count(1)):
-            on, ev_on = self._l0(handler=boom)
-        with mock.patch("ms.telemetry._ids", itertools.count(1)):
-            off, ev_off = self._l0(off=True, handler=boom)
+        on, ev_on = self._l0(handler=boom)
+        off, ev_off = self._l0(off=True, handler=boom)
         self.assertEqual(on["result"]["ingested"], off["result"]["ingested"])
         self.assertEqual(on["result"]["ingested"][0]["signal"], "tool_error")
         r = next(e for e in ev_on if e["type"] == "action.result")["data"]
@@ -2169,11 +2164,8 @@ class EnforceWiring(unittest.TestCase):
         self.Reader = dc_state_reader()[0]
 
     def _rt(self, llm=None, reader=True, mode="enforce", sink=None, **kw):
-        import itertools
         import tempfile
-        from unittest import mock
-        with mock.patch("ms.telemetry._ids", itertools.count(1)):
-            spec, m, reg, *_ = world()
+        spec, m, reg, *_ = world()
         self.ledger = os.path.join(tempfile.mkdtemp(), "runs.jsonl")
         rt = Runtime(m, reg, {"p": llm or make_provider("sim-claude")}, guard_mode=mode, ledger_path=self.ledger,
                      l0_sink=sink, **kw)
@@ -2183,10 +2175,7 @@ class EnforceWiring(unittest.TestCase):
         return spec, rt
 
     def _go(self, rt, spec):
-        import itertools
-        from unittest import mock
-        with mock.patch("ms.telemetry._ids", itertools.count(1000)):
-            return rt.handle({"session": "s", "task": "x", "queries": spec["queries"], "max_rounds": 1})
+        return rt.handle({"session": "s", "task": "x", "queries": spec["queries"], "max_rounds": 1})
 
     def _sink(self):
         tele = os.environ.get("TELEMETRY_REPO", os.path.join(ROOT, "..", "Telemetry"))
@@ -2296,6 +2285,70 @@ class EnforceWiring(unittest.TestCase):
         out = self._go(rt, spec)
         self.assertEqual((out["result"]["outcome"], out["result"]["executed"]), ("guard_denied", []))
         self.assertIn("실행기가", out["result"]["rounds"][0]["guard_blocked"])
+
+
+class SdkSeams(unittest.TestCase):
+    """CMD-M26 · BD-120: SDK 가 Runtime 을 감쌀 수 있게 -- 한 프로세스의 Runtime 둘이 서로의 셈을 바꾸지 않는다 · risky 가
+    Guard D 까지 간다 · L0 사건 시각은 Runtime 시계다."""
+
+    def _two(self, reader=None):
+        def one():
+            spec, m, reg, *_ = world()
+            rt = Runtime(m, reg, {"p": ScriptedLLM([{"tool": "throttle", "target": "srv07", "args": {"level": 2}}])})
+            if reader is not None:
+                rt.state_reader = reader(rt.um, m)
+            rt.open_session("s", {"token_budget": 1000})
+            return rt, spec
+        return one(), one()
+
+    def test_two_runtimes_give_the_same_ids_and_do_not_touch_each_other(self):
+        dc = os.environ.get("MS_DC_PATH", os.path.join(ROOT, "..", "DC"))
+        if not os.path.isdir(os.path.join(dc, "dc")):
+            self.skipTest("옆에 DC 가 없다(MS_DC_PATH) -- 결정 id 가 관측 id 에 묶이는 것은 DC 길이다")
+        from ms.eval import dc_state_reader
+        (a, spec), (b, _) = self._two(dc_state_reader()[0])
+        req = {"session": "s", "task": "x", "queries": spec["queries"]}
+        out_a1 = a.handle(dict(req))
+        for _ in range(3):                                               # b 가 한참 앞서 가도
+            b.handle(dict(req))
+        out_a2 = a.handle(dict(req))
+        (c, _), (d, _) = self._two(dc_state_reader()[0])
+        out_c1, out_c2 = c.handle(dict(req)), c.handle(dict(req))
+        self.assertEqual((out_a1["decision"]["id"], out_a2["decision"]["id"]),
+                         (out_c1["decision"]["id"], out_c2["decision"]["id"]))     # a 는 b 와 따로, c 와 같은 셈
+        self.assertEqual(out_a1["run_id"].split("-")[1], "1")                       # 실행 id 셈도 Runtime 마다
+        self.assertEqual(out_a2["run_id"].split("-")[1], "2")
+
+    def test_risky_reaches_guard_d(self):
+        G = guard_pkg()
+        dc = os.environ.get("MS_DC_PATH", os.path.join(ROOT, "..", "DC"))
+        if G is None or not os.path.isdir(os.path.join(dc, "dc")):
+            self.skipTest("옆에 guard · DC 가 없다")
+        from ms.eval import dc_state_reader
+
+        def guard_of(**kw):
+            spec, m, reg, *_ = world()
+            rt = Runtime(m, reg, {"p": ScriptedLLM([{"tool": "throttle", "target": "srv07", "args": {"level": 2}}])}, **kw)
+            rt.state_reader = dc_state_reader()[0](rt.um, m)
+            rt.open_session("s", {"token_budget": 1000})
+            g = rt.handle({"session": "s", "task": "x", "queries": spec["queries"]})["guards"][0]["guard"]
+            return g["verdict"], g["rule"]
+        self.assertEqual(guard_of(), ("ALLOW", "0"))                                # 기본: throttle(local)은 D 밖
+        self.assertEqual(guard_of(risky=("local",)), ("DENY", "D"))                 # local 도 위험이라 하면 D 가 막는다
+
+    def test_l0_events_use_the_runtime_clock(self):
+        tele = os.environ.get("TELEMETRY_REPO", os.path.join(ROOT, "..", "Telemetry"))
+        if not os.path.isdir(os.path.join(tele, "telemetry")):
+            self.skipTest("옆에 Telemetry 가 없다(TELEMETRY_REPO)")
+        if tele not in sys.path:
+            sys.path.append(tele)
+        from telemetry import MemorySink
+        spec, m, reg, *_ = world()
+        sink = MemorySink()
+        rt = Runtime(m, reg, {"p": make_provider("sim-claude")}, l0_sink=sink)
+        rt.open_session("s", {"token_budget": 1000})
+        rt.handle({"session": "s", "task": "x", "queries": spec["queries"]})
+        self.assertEqual({e["at"] for e in sink.events}, {rt.clock() * 1000})      # 이 세계의 시계는 멈춰 있다
 
 
 if __name__ == "__main__":

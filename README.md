@@ -184,6 +184,13 @@ provider 계획 · 중재 결정 · 재현 입력은 `DecisionRecord` 에 있고
 - 어댑터 · 재료 오류는 DENY(E) 로 남긴다.
 - 대조표: `python3 eval/guard_contrast.py`. 시험은 `MS_GUARD_PATH`(기본 `../guard`)에 guard 가 있을 때만 돈다.
 
+**SDK 가 꽂는 자리 (CMD-M26 · BD-120).** 한 프로세스에 Runtime 이 여럿이어도 서로를 바꾸지 않는다.
+- 관측 id(`t<n>`)는 **받는 State Manager 가 자기 셈으로** 매긴다(`Telemetry.id` 기본 None). 실행 id 셈은 Runtime 마다다.
+  예전에는 둘 다 모듈 전역 셈이라 같은 세계라도 앞서 돈 것에 따라 DC provenance · 결정 id 가 달라졌다(BD-104 의 3).
+- `Runtime(risky=…)`: Guard D 가 막는 위험 등급. 없으면 Guard 의 기본(external · irreversible).
+- L0 사건 시각(`at`)은 Runtime 시계(ms)다(`l0.recorder(..., wall=)`).
+- 사용량 문턱(`usage_model.py`)은 아직 꽂을 수 없다 -- 꽂을 자리로 적어 둔다.
+
 **Guard enforce (`Runtime(guard_mode="enforce")`, CMD-M24 · BD-114 · BD-116).** 기본은 `"shadow"`(지금 그대로 -- Guard 는 기록만).
 - enforce 인데 guard(와 action 실행기)를 불러올 수 없으면 런타임이 서지 않는다(`ImportError`, 닫는 쪽). 모르는 모드는 `ValueError`.
 - DC 길: **실행 = Arbiter ALLOW ∧ Guard ALLOW**(논리곱, BD-07). 명령 재료는 guard `command_material(GuardResult, intent)`(E3).

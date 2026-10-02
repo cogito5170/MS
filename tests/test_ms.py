@@ -83,8 +83,9 @@ class TelemetryIsNotState(unittest.TestCase):
     def test_provenance_points_to_telemetry(self):
         _, m, *_ = world()
         t = Telemetry("bmc", "srv02", "cpu_temp", 70, ts=999)
-        m.ingest(t)
-        self.assertEqual(m.graph.nodes["srv02"].props["temp_c"].src, t.id)
+        r = m.ingest(t)                                                # id 는 받는 관리자가 매긴다(CMD-M26)
+        self.assertEqual(m.graph.nodes["srv02"].props["temp_c"].src, r.telemetry)
+        self.assertTrue(r.telemetry.startswith("t"))
         self.assertTrue(m.graph.nodes["srv02"].props["status"].src.startswith("derived:"))
 
     def test_tool_result_is_observation_not_state(self):

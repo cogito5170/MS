@@ -54,16 +54,17 @@ def material(reader):
 class Shadow:
     """Runtime 하나에 하나. A8 기억(`allowed`)을 든다."""
 
-    def __init__(self, registry, grants=(), mode: str = "shadow"):
+    def __init__(self, registry, grants=(), mode: str = "shadow", risky=None):
         self.g = _guard()
         self.reg, self.grants, self.mode = registry, frozenset(grants), mode     # mode: GuardResult 의 칸(판정과 무관, G6)
+        self.risky = None if risky is None else tuple(risky)    # D 가 막는 위험 등급(CMD-M26). None 이면 Guard 의 기본
         self.allowed: set = set()
 
     def _model(self):
         g = self.g
         specs = {t.name: g.ActionSpec(t.name, t.target_model, dict(t.params), tuple(t.preconditions), t.risk)
                  for t in self.reg.tools.values()}
-        return g.GuardModel(specs, self.grants)
+        return g.GuardModel(specs, self.grants, self.risky) if self.risky is not None else g.GuardModel(specs, self.grants)
 
     def _state(self, m):
         g = self.g

@@ -44,7 +44,6 @@ from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt, d
 from .run_telemetry import RunRecord, cost_of
 from .tools import RETRIEVE
 
-_ids = itertools.count(1)
 
 
 _SCALAR = (str, int, float, bool, type(None))
@@ -71,7 +70,7 @@ class Runtime:
                  provider_policy=None, base_context: "dict | None" = None, prices: "dict | None" = None,
                  ledger_path: "str | None" = None, max_rounds: int = 4, wall=time.perf_counter,
                  usage_manager=None, prompt_layout: "str | None" = None, l0_ledger: "str | None" = None,
-                 l0_sink=None, state_reader=None, run_state=None, guard_mode: str = "shadow"):
+                 l0_sink=None, state_reader=None, run_state=None, guard_mode: str = "shadow", risky=None):
         self.m, self.reg, self.providers = manager, registry, dict(providers)
         self.um = usage_manager or manager
         if self.um.clock is not manager.clock:
@@ -87,7 +86,8 @@ class Runtime:
         if guard_mode not in ("shadow", "enforce"):
             raise ValueError(f"guard_mode={guard_mode!r}: shadow · enforce 가운데 하나")
         self.guard_mode = guard_mode
-        self.guard = guard_shadow.Shadow(registry, grants, guard_mode) if guard_shadow.available() else None
+        # risky: Guard D 가 막는 위험 등급(SDK 가 꽂는 자리, CMD-M26). None 이면 Guard 의 기본(external · irreversible)
+        self.guard = guard_shadow.Shadow(registry, grants, guard_mode, risky) if guard_shadow.available() else None
         if guard_mode == "enforce" and (self.guard is None or not D.available()):
             raise ImportError("guard_mode=enforce 인데 guard(또는 action 실행기)를 불러올 수 없다 -- 런타임을 세우지 않는다")
         self.dispatch = D.Dispatch(registry) if D.available() else None   # DC 길 실행기(CMD-M20 shadow → M22 execute)
@@ -100,6 +100,7 @@ class Runtime:
         self.base_context = dict(BASE_CONTEXT, **(base_context or {}))
         self.prices, self.ledger_path, self.max_rounds, self.wall = prices, ledger_path, max_rounds, wall
         self.records: dict = {}
+        self._run_ids = itertools.count(1)   # 실행 id 셈 -- 이 Runtime 의 것(CMD-M26). 모듈 전역이면 다른 Runtime 이 바꾼다
         self.decisions: dict = {}
         self.intents: dict = {}         # 결정 id -> ActionIntent 기록(shadow, CMD-M15). 결정 기록 밖에 둔다
         self.guards: dict = {}          # 결정 id -> GuardResult 기록(shadow, CMD-M17). 결정 기록 밖에 둔다
@@ -159,8 +160,8 @@ class Runtime:
         cplan, pplan = plan["context_policy"], plan["prompt_policy"]
         choice = self.provider_policy.select(state, request)
         provider = self.providers[choice["provider"]]
-        run_id = request.get("run_id") or f"run-{next(_ids)}-{int(self.clock() * 1000) % 10**8}"
-        l0rec = l0.recorder(run_id, self.l0_ledger, self.l0_sink)
+        run_id = request.get("run_id") or f"run-{next(self._run_ids)}-{int(self.clock() * 1000) % 10**8}"
+        l0rec = l0.recorder(run_id, self.l0_ledger, self.l0_sink, wall=lambda: self.clock() * 1000)   # L0 도 Runtime 시계(ms)
         l0rec.run_start(model=choice.get("model"), provider=choice["provider"])
         pre = []                  # 도구를 실행하면 결정 기록은 그 직전에 지어진다(PC-19 G1 -- ActionCommand.decision_ref 의 자리)
         guards, executions, by_round = [], [], {}

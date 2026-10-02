@@ -19,6 +19,7 @@ unbound · rejected 는 격리함(`quarantine`)에 마지막 몇 개만 남는�
 from __future__ import annotations
 
 import dataclasses
+import itertools
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 
@@ -47,6 +48,7 @@ class StateManager:
         self.quarantine: deque = deque(maxlen=quarantine_size)
         self.measurements: dict = defaultdict(dict)   # 측정 창: 개체 -> 속성 -> deque[Value] (그래프 밖)
         self.config: dict = defaultdict(dict)         # 운영자 설정: 개체 -> 속성 -> 값 (관측 아님, 시각 없음, 그래프 밖)
+        self._tids = itertools.count(1)               # 관측 id 셈 -- 이 관리자의 것(CMD-M26). 모듈 전역이 아니다
         for m in models:
             self.add_model(m)
         for r in relationships:
@@ -103,6 +105,8 @@ class StateManager:
         t = t if isinstance(t, Telemetry) else Telemetry.from_dict(t)
         if t.ts is None:
             t = dataclasses.replace(t, ts=self.clock())
+        if t.id is None:
+            t = dataclasses.replace(t, id=f"t{next(self._tids)}")
         node = self.graph.nodes.get(t.entity)
         if node is None:
             return self._refuse(UNBOUND, t, f"개체 {t.entity} 가 없다")
