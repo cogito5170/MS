@@ -44,7 +44,7 @@ def tool_error(target, e) -> dict:
 @dataclass
 class RunResult:
     rounds: list = field(default_factory=list)
-    outcome: str = ""            # executed · noop · denied · exhausted · llm_error
+    outcome: str = ""            # executed · noop · denied · exhausted · llm_error · guard_denied(enforce, CMD-M24)
     ingested: list = field(default_factory=list)
     calls: list = field(default_factory=list)       # LLM 호출마다 canonical 사용량 · 지연 · 맥락 크기
     executed: list = field(default_factory=list)    # 실행된 도구 [{"tool", "target"}]
@@ -63,13 +63,14 @@ class Pipeline:
                  model: "str | None" = None, stream: bool = False, tool_mode: str = "text",
                  prompt_layout: "str | None" = None, preamble: str = "", cr: "ContextRuntime | None" = None,
                  recorder=None, provider_label: "str | None" = None, before_execute=None,
-                 after_decide=None, dispatch=None):
+                 after_decide=None, dispatch=None, gate=None):
         self.m, self.reg = manager, registry
         self.rec = recorder or NullRecorder()      # L0 Telemetry -- 무슨 일이 일어났나만(ms/l0.py)
         self.provider_label = provider_label       # L0 에 적을 provider 이름(런타임이 고른 이름 -- 모의면 sim-*)
         self.before_execute = before_execute       # 도구 실행 직전에 RunResult 로 불린다 -- 결정 기록을 실행 전에 짓는 자리(PC-19 G1)
         self.after_decide = after_decide           # 판마다 Arbiter 판정 직후(실행 전)에 (판, 제안, 맥락, 판정) -- Guard shadow 의 자리(CMD-M17)
-        self.dispatch = dispatch                   # (판, 제안, 결정 id) -> 관측 목록 | None. 있으면 실행기가 실행한다(CMD-M22, DC 길)
+        self.dispatch = dispatch                   # (판, 제안, 결정 id) -> 관측 목록 | {관측 · 행동 · 겨냥} | None. 있으면 실행기가 실행한다(CMD-M22, DC 길)
+        self.gate = gate                           # (판) -> 막는 까닭 | None. 있으면 Arbiter ALLOW 뒤 실행 전에 묻는다(Guard enforce, CMD-M24)
         self.provider = llm if isinstance(llm, LLMProvider) else CallableProvider(llm)
         self.llm = llm
         self.cr = cr or ContextRuntime(registry, policy, prompt_plan, prompt_layout, retrieve_max)
@@ -140,11 +141,19 @@ class Pipeline:
                     if nid not in retrieved:
                         retrieved.append(nid)
                 continue
+            blocked = self.gate(i + 1) if self.gate is not None else None
+            if blocked:                                 # enforce: Arbiter 가 ALLOW 해도 Guard 가 막으면 실행하지 않는다(논리곱, BD-07)
+                rnd["guard_blocked"] = blocked
+                res.outcome = "guard_denied"
+                return res
             decision_ref = None
             if self.before_execute is not None:         # 실행 직전: 이 판까지의 제안 · 판정은 다 정해졌다. 결정 id 를 돌려받는다(PC19 G1)
                 decision_ref = self.before_execute(res)
             tool = self.reg.get(p.tool)                 # 여기 -- ALLOW 가지 안 -- 가 도구가 불리는 유일한 자리
             obs = self.dispatch(i + 1, p, decision_ref) if self.dispatch is not None else None
+            ran_as = (tool.name, p.target)
+            if isinstance(obs, dict):                   # 실행기가 다른 행동으로 갈아 끼워 실행했다(SAFE_ACTION, BD-116)
+                ran_as, obs = (obs["action"], obs["target"]), obs["observations"]
             if obs is None:                             # 실행기 길이 아니다(snapshot 길) -- 지금처럼 L0 tool.* 로
                 with self.rec.tool(tool.name, {"target": p.target, "args": p.args}, call_index=len(res.calls) - 1) as t:
                     try:
@@ -155,11 +164,11 @@ class Pipeline:
                     else:                               # 도구가 tool_error 를 **보고**했나 -- 관측이다
                         t.result(is_error=any(o.get("signal") == "tool_error" for o in obs),
                                  output=json.dumps(obs, ensure_ascii=False, default=str))
-            res.executed.append({"tool": tool.name, "target": p.target})
+            res.executed.append({"tool": ran_as[0], "target": ran_as[1]})
             for o in obs:
                 o = dict(o)
-                o.setdefault("entity", p.target)
-                o.setdefault("source", f"tool:{tool.name}")
+                o.setdefault("entity", ran_as[1])
+                o.setdefault("source", f"tool:{ran_as[0]}")
                 o.setdefault("ts", self.m.clock())
                 r = self.m.ingest(Telemetry.from_dict(o))
                 res.ingested.append({"signal": o["signal"], "status": r.status, "reason": r.reason,

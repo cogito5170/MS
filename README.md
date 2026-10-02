@@ -184,6 +184,15 @@ provider 계획 · 중재 결정 · 재현 입력은 `DecisionRecord` 에 있고
 - 어댑터 · 재료 오류는 DENY(E) 로 남긴다.
 - 대조표: `python3 eval/guard_contrast.py`. 시험은 `MS_GUARD_PATH`(기본 `../guard`)에 guard 가 있을 때만 돈다.
 
+**Guard enforce (`Runtime(guard_mode="enforce")`, CMD-M24 · BD-114 · BD-116).** 기본은 `"shadow"`(지금 그대로 -- Guard 는 기록만).
+- enforce 인데 guard(와 action 실행기)를 불러올 수 없으면 런타임이 서지 않는다(`ImportError`, 닫는 쪽). 모르는 모드는 `ValueError`.
+- DC 길: **실행 = Arbiter ALLOW ∧ Guard ALLOW**(논리곱, BD-07). 명령 재료는 guard `command_material(GuardResult, intent)`(E3).
+  Guard 가 막으면(DENY · 결과 없음 · 실행기가 받지 않을 명령) 실행하지 않는다 -- 실행기 · L0 `action.*` · VERIFY 가 모두 없고,
+  그 판에 `guard_blocked`(까닭), 실행 결과는 `guard_denied` 다. 다시 묻지 않는다(그 요청은 거기서 끝난다). 지금 길로 돌아가지도 않는다.
+  SAFE_ACTION 은 지금 나오지 않는다(G4). 나오면 갈아 끼운 행동(겨냥 · 인자 없음)으로 실행기에 간다(BD-116).
+- snapshot 길: 도구를 실행하지 않는다(BD-114 의 2). 제안 · 판정은 기록된다.
+- 대조: `python3 eval/enforce_contrast.py`.
+
 **DC 길의 도구 실행은 실행기가 한다 (`ms/dispatch.py`, CMD-M20 shadow → M21 → M22 execute · BD-108 (4) · BD-111).** 한 실행은 한 사건이다(BD-97 Q3).
 - DC 길(결정 문맥 id 가 있는 길)에서 도구를 실행하면 `action.executor.execute(cmd, ActionModel, {이름: ms_handler(tool.run)}, recorder, mode="execute")` 로 한다.
   그 실행(run)의 L0 에는 `action.dispatch` / `action.result` 한 쌍만 남는다(`action_ref` = command_id, 인자는 `args_sig` 로). `tool.*` 은 없다.

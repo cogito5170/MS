@@ -54,9 +54,9 @@ def material(reader):
 class Shadow:
     """Runtime 하나에 하나. A8 기억(`allowed`)을 든다."""
 
-    def __init__(self, registry, grants=()):
+    def __init__(self, registry, grants=(), mode: str = "shadow"):
         self.g = _guard()
-        self.reg, self.grants = registry, frozenset(grants)
+        self.reg, self.grants, self.mode = registry, frozenset(grants), mode     # mode: GuardResult 의 칸(판정과 무관, G6)
         self.allowed: set = set()
 
     def _model(self):
@@ -74,7 +74,7 @@ class Shadow:
 
     def _error(self, it, why: str) -> dict:
         g = self.g
-        return g.GuardResult(it.id, g.DENY, g.SHADOW, "E", (), [f"[E] {why}"], None).to_dict()
+        return g.GuardResult(it.id, g.DENY, self.mode, "E", (), [f"[E] {why}"], None).to_dict()
 
     def check(self, it, mat, ctx, m) -> dict:
         """의도 하나 -> GuardResult dict. ctx 는 그 판의 CR 맥락, m 은 지금의 State Manager."""
@@ -90,7 +90,7 @@ class Shadow:
         except Exception as e:                           # 어댑터 오류 = DENY(E)
             return self._error(it, f"어댑터: {type(e).__name__}: {e}")
         try:
-            _, res = g.evaluate(it, dc, state, model)    # Guard 는 안에서 예외를 DENY(E) 로 바꾼다. 그 밖의 것도 여기서 막는다
+            _, res = g.evaluate(it, dc, state, model, mode=self.mode)   # 예외는 Guard 안에서 DENY(E). 그 밖의 것도 여기서 막는다
             if res.verdict == g.ALLOW:
                 node = m.graph.nodes.get(it.target)
                 self.allowed.add(g.repeat_key(it, node.version if node is not None else -1))

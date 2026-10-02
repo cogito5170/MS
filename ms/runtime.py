@@ -71,7 +71,7 @@ class Runtime:
                  provider_policy=None, base_context: "dict | None" = None, prices: "dict | None" = None,
                  ledger_path: "str | None" = None, max_rounds: int = 4, wall=time.perf_counter,
                  usage_manager=None, prompt_layout: "str | None" = None, l0_ledger: "str | None" = None,
-                 l0_sink=None, state_reader=None, run_state=None):
+                 l0_sink=None, state_reader=None, run_state=None, guard_mode: str = "shadow"):
         self.m, self.reg, self.providers = manager, registry, dict(providers)
         self.um = usage_manager or manager
         if self.um.clock is not manager.clock:
@@ -82,7 +82,14 @@ class Runtime:
         self.template_version = TEMPLATE_VERSIONS[self.prompt_layout]
         U.install(self.um)
         self.arbiter = Arbiter(registry, grants, clock=self.clock)
-        self.guard = guard_shadow.Shadow(registry, grants) if guard_shadow.available() else None   # shadow(CMD-M17)
+        # Guard(CMD-M17 shadow · CMD-M24 enforce). shadow: 기록만(기본). enforce: 실행 = Arbiter ALLOW ∧ Guard ALLOW,
+        # snapshot 길은 실행하지 않는다(BD-114). enforce 인데 guard 가 없으면 런타임이 서지 않는다(닫는 쪽)
+        if guard_mode not in ("shadow", "enforce"):
+            raise ValueError(f"guard_mode={guard_mode!r}: shadow · enforce 가운데 하나")
+        self.guard_mode = guard_mode
+        self.guard = guard_shadow.Shadow(registry, grants, guard_mode) if guard_shadow.available() else None
+        if guard_mode == "enforce" and (self.guard is None or not D.available()):
+            raise ImportError("guard_mode=enforce 인데 guard(또는 action 실행기)를 불러올 수 없다 -- 런타임을 세우지 않는다")
         self.dispatch = D.Dispatch(registry) if D.available() else None   # DC 길 실행기(CMD-M20 shadow → M22 execute)
         # Health VERIFY(CMD-M23, 선택 의존). run_state: $run.* 읽기 · subjects 를 줄 Sensor state-export 이음매(없으면 None)
         self.verifier = V.Verifier(registry, run_state) if V.available() else None
@@ -174,12 +181,33 @@ class Runtime:
             pre.append(self._decision(state, cplan, pplan, choice, r, source))
             return pre[-1].id
 
+        enforce = self.guard_mode == "enforce"
+
         def dispatch(rnd, p, decision_ref):
-            """도구 호출 자리(DC 길): 실행기로 실행하고 관측을 돌려준다. L0 에는 action.* 한 쌍만(tool.* 없음)."""
+            """도구 호출 자리(DC 길): 실행기로 실행하고 관측을 돌려준다. L0 에는 action.* 한 쌍만(tool.* 없음).
+            재료: shadow 는 Arbiter ALLOW 의도(BD-111), enforce 는 guard command_material(E3)."""
             it, verdict, g = by_round.get(rnd, (None, None, None))
-            entry, obs = self.dispatch.run(it, verdict, g, decision_ref, self.clock() * 1000, l0rec)
+            entry, obs = self.dispatch.run(it, verdict, g, decision_ref, self.clock() * 1000, l0rec,
+                                           source="guard" if enforce else "arbiter")
             executions.append({"round": rnd, **entry})
             return obs
+
+        def gate(rnd):
+            """enforce: 실행해도 되나. 막는 까닭(문자열) 또는 None. DC 길은 Guard ALLOW · SAFE_ACTION 이고 실행기가 그 명령을
+            받을 때만, snapshot 길은 언제나 막는다(BD-114 의 2). 막으면 실행기 · L0 action.* · VERIFY 가 없다."""
+            if not intent.dc_id(source):
+                return "enforce: snapshot 길은 실행하지 않는다(BD-114)"
+            it, verdict, g = by_round.get(rnd, (None, None, None))
+            if g is None:
+                return "enforce: Guard 결과가 없다(의도 없음)"
+            if g["verdict"] not in ("ALLOW", "SAFE_ACTION"):
+                return f"enforce: Guard {g['verdict']}({g['rule']})"
+            cmd, why = self.dispatch.command(it, verdict, "dec-gate", self.clock() * 1000, g, source="guard")
+            if cmd is None:
+                return f"enforce: 명령을 지을 수 없다 -- {why}"
+            if self.dispatch.model.get(cmd.action) is None or cmd.action not in self.dispatch.handlers:
+                return f"enforce: 실행기가 {cmd.action} 를 받지 않는다"      # 지금 길로 돌아가지 않게 미리 막는다
+            return None
         pipe = Pipeline(self.m, self.reg, provider, None, self.arbiter,
                         model=choice.get("model"), stream=bool(request.get("stream")),
                         tool_mode=request.get("tool_mode", "text"), preamble=request.get("preamble", ""),
@@ -187,7 +215,8 @@ class Runtime:
                         provider_label=choice["provider"],
                         before_execute=before_execute,
                         after_decide=decided if intent.dc_id(source) and (self.guard or self.dispatch) else None,
-                        dispatch=dispatch if self.dispatch and intent.dc_id(source) else None)
+                        dispatch=dispatch if self.dispatch and intent.dc_id(source) else None,
+                        gate=gate if enforce else None)
         res = pipe.run(request["task"], request.get("queries", ()), max_rounds=request.get("max_rounds", self.max_rounds),
                        supplied=supplied)
         total_ms = (self.wall() - t0) * 1000

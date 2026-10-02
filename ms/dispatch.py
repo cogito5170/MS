@@ -73,23 +73,35 @@ class Dispatch:
             return f"Guard {res.verdict}({res.rule})"
         return "같음" if cmd.command_material(res, intent) == mat else "다름"
 
-    def command(self, intent, arbiter_verdict: str, decision_ref: str, issued_at_ms: float):
-        """(ActionCommand | None, 못 지은 까닭 | None)."""
+    def command(self, intent, arbiter_verdict: str, decision_ref: str, issued_at_ms: float, guard_result=None,
+                source: str = "arbiter"):
+        """(ActionCommand | None, 못 지은 까닭 | None). source: 재료의 출처 -- "arbiter"(shadow, BD-111) · "guard"(enforce,
+        E3: guard `command_material`, SAFE_ACTION 이면 갈아 끼운 행동)."""
         if self.model is None:
             return None, f"ActionModel: {self.model_error}"
         if intent is None or isinstance(intent, list):
             return None, "의도가 없다"
         if arbiter_verdict != ALLOW:
             return None, f"Arbiter {arbiter_verdict} -- 명령이 없다"
-        mat = material(intent)
+        if source == "guard":
+            g = _guard_command()
+            if g is None or guard_result is None:
+                return None, "Guard 결과가 없다 -- enforce 는 명령을 짓지 않는다"
+            cmd, forms = g
+            res = forms.GuardResult.from_dict(guard_result)
+            if res.verdict not in (forms.ALLOW, forms.SAFE_ACTION):
+                return None, f"Guard {res.verdict}({res.rule}) -- 명령이 없다"
+            mat = cmd.command_material(res, intent)
+        else:
+            mat = material(intent)
         return ActionCommand(intent_id=mat["intent_id"], decision_ref=decision_ref, action=mat["action"],
                              target=mat["target"], args=mat["args"], issued_at=issued_at_ms, deadline=None), None
 
     def run(self, intent, arbiter_verdict: str, guard_result: "dict | None", decision_ref: str, issued_at_ms: float,
-            recorder) -> "tuple[dict, list | None]":
+            recorder, source: str = "arbiter") -> "tuple[dict, list | dict | None]":
         out = {"model": self.model.version if self.model else None, "command": None, "execution": None}
         try:
-            command, why = self.command(intent, arbiter_verdict, decision_ref, issued_at_ms)
+            command, why = self.command(intent, arbiter_verdict, decision_ref, issued_at_ms, guard_result, source)
         except Exception as e:
             command, why = None, f"{type(e).__name__}: {e}"
         if command is None:
@@ -102,4 +114,6 @@ class Dispatch:
         obs = list(ex.observations)
         if ex.raised is not None:
             obs = [tool_error(command.target, ex.raised)]
+        if (command.action, command.target) != (intent.action, intent.target):   # 갈아 끼운 행동으로 실행했다(SAFE_ACTION)
+            return out, {"observations": obs, "action": command.action, "target": command.target}
         return out, obs

@@ -2156,5 +2156,135 @@ class VerifyWiring(unittest.TestCase):
         self.assertTrue(off["executions"][0]["execution"]["executed"])                     # 실행기는 그대로
 
 
+class EnforceWiring(unittest.TestCase):
+    """CMD-M24 · BD-114 · BD-116: guard_mode="enforce" -- 실행 = Arbiter ALLOW ∧ Guard ALLOW. 명령 재료는 guard command_material.
+    Guard 가 막으면 실행기 · L0 action.* · VERIFY 가 없다. snapshot 길은 실행하지 않는다. shadow(기본)는 그대로."""
+
+    def setUp(self):
+        self.G = guard_pkg()
+        dc = os.environ.get("MS_DC_PATH", os.path.join(ROOT, "..", "DC"))
+        if self.G is None or not os.path.isdir(os.path.join(dc, "dc")):
+            self.skipTest("옆에 guard · DC 가 없다(MS_GUARD_PATH · MS_DC_PATH)")
+        from ms.eval import dc_state_reader
+        self.Reader = dc_state_reader()[0]
+
+    def _rt(self, llm=None, reader=True, mode="enforce", sink=None, **kw):
+        import itertools
+        import tempfile
+        from unittest import mock
+        with mock.patch("ms.telemetry._ids", itertools.count(1)):
+            spec, m, reg, *_ = world()
+        self.ledger = os.path.join(tempfile.mkdtemp(), "runs.jsonl")
+        rt = Runtime(m, reg, {"p": llm or make_provider("sim-claude")}, guard_mode=mode, ledger_path=self.ledger,
+                     l0_sink=sink, **kw)
+        if reader:
+            rt.state_reader = self.Reader(rt.um, m)
+        rt.open_session("s", {"token_budget": 1000})
+        return spec, rt
+
+    def _go(self, rt, spec):
+        import itertools
+        from unittest import mock
+        with mock.patch("ms.telemetry._ids", itertools.count(1000)):
+            return rt.handle({"session": "s", "task": "x", "queries": spec["queries"], "max_rounds": 1})
+
+    def _sink(self):
+        tele = os.environ.get("TELEMETRY_REPO", os.path.join(ROOT, "..", "Telemetry"))
+        if not os.path.isdir(os.path.join(tele, "telemetry")):
+            return None
+        if tele not in sys.path:
+            sys.path.append(tele)
+        from telemetry import MemorySink
+        return MemorySink()
+
+    def test_enforce_needs_guard_and_a_known_mode(self):
+        from unittest import mock
+        spec, m, reg, *_ = world()
+        with self.assertRaises(ValueError):
+            Runtime(m, reg, {"p": make_provider("sim-claude")}, guard_mode="loud")
+        with mock.patch.dict(sys.modules, {"guard": None, "guard.forms": None, "guard.command": None}):
+            with self.assertRaises(ImportError):
+                Runtime(m, reg, {"p": make_provider("sim-claude")}, guard_mode="enforce")
+            self.assertIsNone(Runtime(m, reg, {"p": make_provider("sim-claude")}).guard)     # 대조: shadow 는 선다
+
+    def test_guard_allow_runs_with_guard_material(self):
+        """둘 다 ALLOW: 실행한다. 명령 재료는 guard command_material, GuardResult 의 mode 는 enforce. 실행 · 관측 · 결정 id 는
+        shadow 와 같다."""
+        llm = lambda: ScriptedLLM([{"tool": "throttle", "target": "srv07", "args": {"level": 2}}])
+        spec, rt = self._rt(llm())
+        on = self._go(rt, spec)
+        spec, sh = self._rt(llm(), mode="shadow")
+        off = self._go(sh, spec)
+        g = on["guards"][0]
+        self.assertEqual((g["arbiter"], g["guard"]["verdict"], g["guard"]["mode"]), (["ALLOW", "0"], "ALLOW", "enforce"))
+        from action.forms import ActionIntent
+        res = self.G.GuardResult.from_dict(g["guard"])
+        it = ActionIntent.from_dict(on["intents"][0]["intent"])
+        mat = self.G.command_material(res, it)
+        cmd = on["executions"][0]["command"]
+        self.assertEqual({k: cmd[k] for k in mat}, mat)
+        self.assertEqual((on["result"]["executed"], on["result"]["ingested"]), (off["result"]["executed"], off["result"]["ingested"]))
+        self.assertEqual(on["decision"]["id"], off["decision"]["id"])
+        self.assertEqual(off["guards"][0]["guard"]["mode"], "shadow")
+
+    def test_guard_deny_blocks_everything_downstream(self):
+        """Arbiter ALLOW · Guard DENY(D): 실행 0 · 실행기 0 · L0 action.*/tool.* 0 · VERIFY 0. 원장에 결정 · 의도 · guard 와 막힘."""
+        sink = self._sink()
+        spec, rt = self._rt(ScriptedLLM([{"tool": "reboot", "target": "srv07", "rationale": "x"}]), grants=("reboot",),
+                            sink=sink)
+        out = self._go(rt, spec)
+        g = out["guards"][0]
+        self.assertEqual((g["arbiter"], g["guard"]["verdict"], g["guard"]["rule"]), (["ALLOW", "0"], "DENY", "D"))
+        self.assertEqual(out["result"]["outcome"], "guard_denied")
+        self.assertTrue(out["result"]["rounds"][0]["guard_blocked"].startswith("enforce: Guard DENY(D)"))   # 막은 자리가 Guard 판정이다
+        self.assertEqual((out["result"]["executed"], out["result"]["ingested"], out["executions"], out.get("verifications")),
+                         ([], [], [], []))
+        with open(self.ledger, encoding="utf-8") as fh:
+            kinds = [json.loads(l)["kind"] for l in fh]
+        self.assertEqual(kinds, ["decision", "intent", "guard", "run"])
+        if sink is not None:
+            self.assertFalse([e["type"] for e in sink.events if e["type"].startswith(("action.", "tool."))])
+        spec, sh = self._rt(ScriptedLLM([{"tool": "reboot", "target": "srv07", "rationale": "x"}]), grants=("reboot",),
+                            mode="shadow")
+        self.assertEqual(self._go(sh, spec)["result"]["executed"], [{"tool": "reboot", "target": "srv07"}])   # 대조
+
+    def test_safe_action_runs_the_swapped_action(self):
+        """BD-116: SAFE_ACTION 은 지금 나오지 않는다(G4). 나오면 guard 재료(갈아 끼운 행동 · 겨냥 없음 · 인자 없음)로 실행기에 간다 --
+        제안한 행동이 아니라. Guard 결과를 바꿔 끼워 그 가지를 연다."""
+        spec, rt = self._rt(ScriptedLLM([{"tool": "throttle", "target": "srv07", "args": {"level": 2}}]))
+        real = rt.guard.check
+        ran = []
+
+        def check(it, mat, ctx, m):
+            r = self.G.GuardResult.from_dict(real(it, mat, ctx, m))
+            return self.G.GuardResult(r.intent_id, "SAFE_ACTION", "enforce", "D", r.state_refs,
+                                      ["[D] 시험: 갈아 끼움"], "open_ticket").to_dict()
+        rt.guard.check = check
+        rt.reg.get("open_ticket").handler = lambda target, args: ran.append((target, args)) or []
+        out = self._go(rt, spec)
+        cmd = out["executions"][0]["command"]
+        self.assertEqual((cmd["action"], cmd["target"], cmd["args"]), ("open_ticket", None, {}))
+        self.assertEqual(ran, [(None, {})])
+        self.assertEqual(out["result"]["executed"], [{"tool": "open_ticket", "target": None}])
+
+    def test_snapshot_path_never_runs_tools(self):
+        sink = self._sink()
+        spec, rt = self._rt(reader=False, sink=sink)
+        out = self._go(rt, spec)
+        self.assertEqual((out["result"]["outcome"], out["result"]["executed"]), ("guard_denied", []))
+        self.assertIn("snapshot", out["result"]["rounds"][0]["guard_blocked"])
+        self.assertEqual(out["result"]["rounds"][0]["decision"]["verdict"], "ALLOW")          # 제안 · 판정은 기록된다
+        if sink is not None:
+            self.assertFalse([e["type"] for e in sink.events if e["type"].startswith(("action.", "tool."))])
+
+    def test_no_fallback_to_the_old_path_under_enforce(self):
+        """enforce 에서 실행기가 받지 않을 명령이면 지금 길(tool.run)로 돌아가지 않고 막는다."""
+        spec, rt = self._rt()
+        rt.dispatch.handlers = {}
+        out = self._go(rt, spec)
+        self.assertEqual((out["result"]["outcome"], out["result"]["executed"]), ("guard_denied", []))
+        self.assertIn("실행기가", out["result"]["rounds"][0]["guard_blocked"])
+
+
 if __name__ == "__main__":
     unittest.main()
