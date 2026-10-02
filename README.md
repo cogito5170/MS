@@ -157,6 +157,8 @@ provider 계획 · 중재 결정 · 재현 입력은 `DecisionRecord` 에 있고
 ## State — 사용의 모형 (`usage_model.py`)
 
 세션 하나의 원 측정은 전부 측정 창(`measurement`)이고, 그래프에는 여덟 상태만 산다. **문턱은 잰 것이 아니라 손으로 둔 것이다** (`MODEL_VERSION`).
+예산(`token_budget` · `context_budget` · `latency_budget_ms`)은 **관측이 아니라 운영자 설정**이다(usage-model-4, PC-03): `open_session` 이
+`configure()` 로 정하고 텔레메트리로는 못 바꾼다(`config.*` 신호는 unbound). 파생 상태의 시각은 관측 입력만으로 정한다.
 
 | 상태 | 모형의 해석 |
 |---|---|

@@ -624,9 +624,9 @@ class QualityStateNeedsTwoEvents(unittest.TestCase):
             self.assertEqual(U.snapshot(m, sid)["correction_rate"], want, seq)
 
     def test_model_version_in_state(self):
-        self.assertEqual(U.MODEL_VERSION, "usage-model-3")
+        self.assertEqual(U.MODEL_VERSION, "usage-model-4")
         m = StateManager(clock=Clock())
-        self.assertEqual(U.snapshot(m, U.open_session(m, "s", {}))["model_version"], "usage-model-3")
+        self.assertEqual(U.snapshot(m, U.open_session(m, "s", {}))["model_version"], "usage-model-4")
 
 
 class CacheStableLayout(unittest.TestCase):
@@ -778,11 +778,61 @@ class ContextActions(unittest.TestCase):
         self.assertEqual(set(ctx.decisions), ids)
 
 
+class ConfigIsNotObservation(unittest.TestCase):
+    """PC-03 · BD-13: 예산 같은 운영자 설정은 관측이 아니다. 텔레메트리로 안 들어오고, 파생의 시각은 관측 입력만으로 정한다."""
+
+    def _session(self, t=1000.0):
+        clock = Clock(t)
+        m = StateManager(clock=clock)
+        sid = U.open_session(m, "s", {"token_budget": 1000, "context_budget": 500})
+        return m, sid, clock
+
+    def test_budget_is_config_not_telemetry(self):
+        m, sid, _ = self._session()
+        self.assertEqual(m.config[sid], {"token_budget": 1000, "context_budget": 500})
+        self.assertNotIn("token_budget", m.measurements.get(sid, {}))
+        self.assertEqual(sum(m.counts.values()), 0)                                   # 텔레메트리를 하나도 안 받았다
+        r = m.ingest({"source": "config", "entity": sid, "signal": "config.token_budget", "value": 5, "ts": 1.0})
+        self.assertEqual(r.status, "unbound")                                         # 신호로는 예산을 못 바꾼다
+        self.assertEqual(m.config[sid]["token_budget"], 1000)
+
+    def test_derived_time_comes_from_observations_only(self):
+        m, sid, clock = self._session(1000.0)
+        clock.t = 1200.0
+        m.ingest({"source": "ms:run", "entity": sid, "signal": "tokens.input_tokens", "value": 950, "ts": 1200.0})
+        v = m.graph.nodes[sid].props["token_budget_pressure"]
+        self.assertEqual(v.value, "HIGH")                                              # 예산은 여전히 뜻에 들어간다(950 >= 0.9 × 1000)
+        self.assertEqual(v.ts, 1200.0)                                                 # 세션을 연 시각(1000)에 묶이지 않는다
+        self.assertEqual(m.age(sid, "token_budget_pressure"), 0.0)
+
+    def test_unknown_budget_stays_unknown(self):
+        clock = Clock(1.0)
+        m = StateManager(clock=clock)
+        sid = U.open_session(m, "s", {})
+        m.ingest({"source": "ms:run", "entity": sid, "signal": "tokens.input_tokens", "value": 950, "ts": 1.0})
+        self.assertNotIn("token_budget_pressure", m.graph.nodes[sid].props)           # 예산을 모르면 모름
+
+    def test_model_guards_the_boundary(self):
+        from ms.model import Model, ModelError
+        base = {"name": "X", "properties": {"b": {"type": "number", "role": "config"}, "x": {"type": "number"}}}
+        with self.assertRaises(ModelError):                                            # 설정을 신호에 묶을 수 없다
+            Model.from_dict({**base, "bindings": [{"signal": "cfg.b", "property": "b"}]})
+        with self.assertRaises(ModelError):                                            # 설정만 보는 파생은 시각이 없다
+            Model.from_dict({**base, "derived": {"d": {"cases": [{"when": [["b", ">", 1]], "value": "Y"}]}}})
+        Model.from_dict({**base, "derived": {"d": {"cases": [{"when": [["x", ">", {"prop": "b", "mul": 1}]], "value": "Y"}]}}})
+        m, sid, _ = self._session()
+        with self.assertRaises(Exception):                                             # 설정이 아닌 속성은 configure 로 못 쓴다
+            m.configure(sid, {"input_tokens": 5})
+        with self.assertRaises(Exception):
+            m.configure(sid, {"token_budget": -1})                                     # 설정도 검증을 지난다
+
+
 class MeasurementWindowName(unittest.TestCase):
     """PC-04 · BD-06: MS 의 원 측정 창은 `measurement` 다. Evidence 는 근거 참조의 이름이라 쓰지 않는다."""
 
     def test_usage_model_uses_measurement_role(self):
-        self.assertEqual({p["role"] for p in U.SESSION["properties"].values()}, {"measurement"})
+        roles = {k: p["role"] for k, p in U.SESSION["properties"].items()}
+        self.assertEqual(set(roles.values()), {"measurement", "config"})     # 측정 창 아니면 운영자 설정(PC-03)
 
     def test_old_role_name_is_read_as_measurement(self):
         from ms.model import Model
@@ -805,8 +855,9 @@ class MeasurementWindowName(unittest.TestCase):
     def test_alias_is_the_same_window(self):
         m = StateManager(clock=Clock())
         U.open_session(m, "s", {"token_budget": 10})
+        m.ingest({"source": "ms:run", "entity": "session:s", "signal": "tokens.input_tokens", "value": 5})
         self.assertIs(m.evidence, m.measurements)
-        self.assertIn("token_budget", m.measurements["session:s"])
+        self.assertIn("input_tokens", m.measurements["session:s"])
 
 
 class OneClock(unittest.TestCase):
@@ -929,7 +980,7 @@ class Harness(unittest.TestCase):
             self.assertEqual(len([r for r in a["rows"] if r["config"] == c]), 14)
         self.assertTrue(all(r["uncached_input_tokens"] is not None for r in a["rows"]))
         self.assertIn("uncached_input_tokens", a["comparisons"][0]["metrics"])
-        self.assertEqual(a["versions"]["usage_model"], "usage-model-3")
+        self.assertEqual(a["versions"]["usage_model"], "usage-model-4")
 
     def test_cli_ask(self):
         p = subprocess.run([sys.executable, "-m", "ms", "ask", "ms/examples/datacenter.json", "--telemetry",
