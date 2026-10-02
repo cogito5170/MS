@@ -1712,8 +1712,9 @@ class GuardShadowWiring(unittest.TestCase):
         self.assertEqual(self.G.GuardResult.from_dict(json.loads(json.dumps(g["guard"]))).to_dict(), g["guard"])
         self.assertEqual((g["arbiter"], g["guard"]["verdict"], g["guard"]["rule"]), (["ALLOW", "0"], "ALLOW", "0"))
         self.assertIn("srv07@5", g["guard"]["state_refs"])                    # 지금 상태를 보았다(판)
-        self.assertEqual([l["kind"] for l in lines], ["decision", "intent", "guard", "run"])
-        self.assertEqual(lines[2]["decision_ref"], out["decision"]["id"])
+        kinds = [l["kind"] for l in lines if l["kind"] in ("decision", "intent", "guard", "run")]   # 실행기 줄은 따로 본다
+        self.assertEqual(kinds, ["decision", "intent", "guard", "run"])
+        self.assertEqual(next(l for l in lines if l["kind"] == "guard")["decision_ref"], out["decision"]["id"])
         self.assertNotIn("guard", json.dumps(out["decision"]))                 # 결정 기록 밖 -- id 의 입력이 아니다
 
     def test_guard_never_decides_execution(self):
@@ -1778,6 +1779,97 @@ class GuardShadowWiring(unittest.TestCase):
         out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
         self.assertEqual(out["guards"][0]["guard"]["verdict"], "ALLOW")
         self.assertEqual((again[0]["verdict"], again[0]["rule"]), ("DENY", "A8"))
+
+
+class ExecutorShadowWiring(unittest.TestCase):
+    """CMD-M20: DC 길의 도구 호출 바로 앞에서 실행기를 shadow 로 부른다. ActionCommand = Guard 재료 + 결정 id + issued_at(ms).
+    처리기를 부르지 않고 L0 에도 적지 않는다 -- 실행은 지금 길 그대로다."""
+
+    def setUp(self):
+        self.G = guard_pkg()
+        dc = os.environ.get("MS_DC_PATH", os.path.join(ROOT, "..", "DC"))
+        from ms import executor_shadow
+        if self.G is None or not executor_shadow.available() or not os.path.isdir(os.path.join(dc, "dc")):
+            self.skipTest("옆에 action · guard · DC 가 없다(MS_ACTION_PATH · MS_GUARD_PATH · MS_DC_PATH)")
+        from ms.eval import dc_state_reader
+        self.Reader = dc_state_reader()[0]
+
+    def _rt(self, llm=None, reader=True, **kw):
+        spec, m, reg, *_ = world()
+        rt = Runtime(m, reg, {"p": llm or make_provider("sim-claude")}, **kw)
+        if reader:
+            rt.state_reader = self.Reader(rt.um, m)
+        rt.open_session("s", {"token_budget": 1000})
+        return spec, rt
+
+    def test_would_dispatch_is_what_actually_ran(self):
+        """끝난 기준: would_dispatch(도구 · 겨냥 · 결정 id) = 실제 실행. 명령은 계약 꼴, issued_at 은 ms, 원장 줄은 결정 뒤."""
+        import tempfile
+        from action.forms import ActionCommand
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = os.path.join(tmp, "runs.jsonl")
+            spec, rt = self._rt(ledger_path=ledger)
+            out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+            with open(ledger, encoding="utf-8") as fh:
+                lines = [json.loads(l) for l in fh]
+        (x,) = out["executions"]
+        w = x["execution"]["would_dispatch"]
+        ran = out["result"]["executed"]
+        self.assertEqual([(w["action_type"], w["target"], w["decision_ref"])],
+                         [(e["tool"], e["target"], out["decision"]["id"]) for e in ran])
+        cmd = ActionCommand.from_dict(json.loads(json.dumps(x["command"])))
+        self.assertEqual((cmd.id, cmd.decision_ref), (w["action_ref"], out["decision"]["id"]))
+        self.assertEqual(cmd.issued_at, rt.clock() * 1000)                     # ms (PC19 G4) -- 이 세계의 시계는 멈춰 있다
+        self.assertEqual((x["execution"]["mode"], x["execution"]["executed"], x["execution"]["refused"]),
+                         ("shadow", False, None))
+        self.assertEqual([l["kind"] for l in lines], ["decision", "intent", "guard", "execution", "run"])
+        self.assertEqual(lines[3]["decision_ref"], out["decision"]["id"])
+
+    def test_shadow_calls_no_handler_and_writes_no_l0(self):
+        """shadow 는 처리기 0 번 · L0 사건 0 개: 실제 도구 호출은 한 번뿐이고, L0 사건은 실행기를 뺀 실행과 같다."""
+        from unittest import mock
+        from ms.tools import ToolSpec
+        tele = os.environ.get("TELEMETRY_REPO", os.path.join(ROOT, "..", "Telemetry"))
+        calls, real_run = [], ToolSpec.run
+
+        def run(tool, target, a):
+            calls.append(tool.name)
+            return real_run(tool, target, a)
+
+        def once(off):
+            sink = None
+            if os.path.isdir(os.path.join(tele, "telemetry")):
+                if tele not in sys.path:
+                    sys.path.append(tele)
+                from telemetry import MemorySink
+                sink = MemorySink()
+            with mock.patch.dict(sys.modules, {"action.executor": None} if off else {}):
+                spec, rt = self._rt(l0_sink=sink)
+            self.assertEqual(rt.dispatch is None, off)
+            with mock.patch.object(ToolSpec, "run", run):
+                out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+            return out, [e["type"] for e in sink.events] if sink is not None else None
+        on, ev_on = once(False)
+        self.assertEqual(calls, ["throttle"])                                 # 실행기는 처리기를 부르지 않았다
+        off, ev_off = once(True)
+        self.assertEqual(off["executions"], [])
+        self.assertEqual(ev_on, ev_off)                                       # L0 그대로(Telemetry 가 있을 때)
+        if ev_on is not None:
+            self.assertFalse([t for t in ev_on if t.startswith("action.")])
+
+    def test_no_command_when_guard_does_not_allow(self):
+        """명령 재료는 Guard 의 것이다: Guard 가 막으면(D) 명령이 없고 까닭만 남는다. 실행은 Arbiter 대로 일어난다."""
+        spec, rt = self._rt(ScriptedLLM([{"tool": "reboot", "target": "srv07", "rationale": "x"}]), grants=("reboot",))
+        out = rt.handle({"session": "s", "task": "x", "queries": spec["queries"]})
+        (x,) = out["executions"]
+        self.assertIsNone(x["command"])
+        self.assertIn("명령 재료가 없다", x["error"])
+        self.assertEqual(out["result"]["executed"], [{"tool": "reboot", "target": "srv07"}])
+
+    def test_snapshot_path_is_untouched(self):
+        spec, rt = self._rt(reader=False)
+        out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        self.assertEqual((out["result"]["outcome"], out["executions"], rt.executions), ("executed", [], {}))
 
 
 if __name__ == "__main__":

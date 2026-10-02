@@ -184,6 +184,18 @@ provider 계획 · 중재 결정 · 재현 입력은 `DecisionRecord` 에 있고
 - 어댑터 · 재료 오류는 DENY(E) 로 남긴다.
 - 대조표: `python3 eval/guard_contrast.py`. 시험은 `MS_GUARD_PATH`(기본 `../guard`)에 guard 가 있을 때만 돈다.
 
+**실행기를 DC 길에 shadow 로 붙인다 (`ms/executor_shadow.py`, 선택 의존 · CMD-M20 · BD-108).** action 의 실행기 · 명세와 guard 의 명령
+재료가 import 되고 DC 길일 때만 돈다.
+- 도구 호출 **바로 앞**에서 ActionCommand 를 짓는다. 재료는 셋이다.
+  - Guard `command_material`
+  - `before_execute` 가 Pipeline 에 돌려준 결정 id
+  - `issued_at` = 시계 × 1000(ms)
+- 그 명령으로 `action.executor.execute(…, mode="shadow")` 를 부른다. 처리기를 부르지 않고 L0 에도 적지 않는다. 실행은 지금 길(`tool.run` · `tool.*`) 그대로다.
+- ActionModel 은 ToolRegistry 의 도구(retrieve 빼고)를 `ActionSpec.from_tool` 로 읽는다. 판본은 도구 정의의 해시다.
+- Guard 가 ALLOW · SAFE_ACTION 이 아니면 명령이 없고, 그 까닭만 남는다.
+- 원장에는 `{"kind": "execution", "decision_ref", "round", "model", "command", "execution"}` 줄로 남고, `handle()` 의 `executions` 에도 담긴다.
+- 대조표: `python3 eval/executor_contrast.py`. `would_dispatch`(도구 · 겨냥 · 결정 id)를 실제 실행과 견준다.
+
 ## State — 사용의 모형 (`usage_model.py`)
 
 세션 하나의 원 측정은 전부 측정 창(`measurement`)이고, 그래프에는 여덟 상태만 산다. **문턱은 잰 것이 아니라 손으로 둔 것이다** (`MODEL_VERSION`).

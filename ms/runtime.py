@@ -38,7 +38,7 @@ from . import usage_model as U
 from .arbiter import DENY, Arbiter
 from .cr import VERSION as CR_VERSION, ContextRuntime
 from .pipeline import Pipeline
-from . import guard_shadow, intent, l0
+from . import executor_shadow, guard_shadow, intent, l0
 from .decision_record import DecisionRecord
 from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt, default_context_plan, undecided
 from .run_telemetry import RunRecord, cost_of
@@ -83,6 +83,8 @@ class Runtime:
         U.install(self.um)
         self.arbiter = Arbiter(registry, grants, clock=self.clock)
         self.guard = guard_shadow.Shadow(registry, grants) if guard_shadow.available() else None   # shadow(CMD-M17)
+        self.dispatch = (executor_shadow.Dispatch(registry) if self.guard and executor_shadow.available()
+                         else None)          # 실행기 shadow(CMD-M20). 명령 재료가 Guard 결과라 Guard 가 있을 때만
         self.ctx_sel = context_selector or FixedContext()
         self.prompt_sel = prompt_selector or FixedPrompt()
         default = next(iter(self.providers)) if self.providers else None
@@ -93,6 +95,7 @@ class Runtime:
         self.decisions: dict = {}
         self.intents: dict = {}         # 결정 id -> ActionIntent 기록(shadow, CMD-M15). 결정 기록 밖에 둔다
         self.guards: dict = {}          # 결정 id -> GuardResult 기록(shadow, CMD-M17). 결정 기록 밖에 둔다
+        self.executions: dict = {}      # 결정 id -> 실행기 shadow 기록(CMD-M20). 결정 기록 밖에 둔다
         self.state_reader = state_reader
         self.l0_ledger, self.l0_sink = l0_ledger, l0_sink      # L0 Telemetry(선택 의존). 둘 다 없으면 안 낸다
         if (l0_ledger or l0_sink) and not l0.available():
@@ -122,7 +125,7 @@ class Runtime:
         l0rec = l0.recorder(run_id, self.l0_ledger, self.l0_sink)
         l0rec.run_start(model=choice.get("model"), provider=choice["provider"])
         pre = []                  # 도구를 실행하면 결정 기록은 그 직전에 지어진다(PC-19 G1 -- ActionCommand.decision_ref 의 자리)
-        guards = []
+        guards, executions, by_round = [], [], {}
 
         def shadow(rnd, p, ctx, d):
             """Arbiter 판정 직후, 같은 지금 상태로 Guard 를 부른다. 기록만 한다 -- 실행은 Arbiter 가 정한다."""
@@ -131,13 +134,24 @@ class Runtime:
                 return
             guards.append({"round": rnd, "intent_id": it.id, "arbiter": [d.verdict, d.rule],
                            "guard": self.guard.check(it, mat, ctx, self.m)})
+            by_round[rnd] = (it, guards[-1]["guard"])
+
+        def before_execute(r):
+            pre.append(self._decision(state, cplan, pplan, choice, r, source))
+            return pre[-1].id
+
+        def dispatch(rnd, p, decision_ref):
+            """도구 호출 바로 앞: 실행기가 이 명령을 무엇으로 내보낼지(shadow). 실행은 지금 길 그대로다."""
+            it, g = by_round.get(rnd, (None, None))
+            executions.append({"round": rnd, **self.dispatch.shadow(it, g, decision_ref, self.clock() * 1000)})
         pipe = Pipeline(self.m, self.reg, provider, None, self.arbiter,
                         model=choice.get("model"), stream=bool(request.get("stream")),
                         tool_mode=request.get("tool_mode", "text"), preamble=request.get("preamble", ""),
                         cr=ContextRuntime.from_plan(self.reg, plan), recorder=l0rec,
                         provider_label=choice["provider"],
-                        before_execute=lambda r: pre.append(self._decision(state, cplan, pplan, choice, r, source)),
-                        after_decide=shadow if self.guard and intent.dc_id(source) else None)
+                        before_execute=before_execute,
+                        after_decide=shadow if self.guard and intent.dc_id(source) else None,
+                        dispatch_shadow=dispatch if self.dispatch and intent.dc_id(source) else None)
         res = pipe.run(request["task"], request.get("queries", ()), max_rounds=request.get("max_rounds", self.max_rounds),
                        supplied=supplied)
         total_ms = (self.wall() - t0) * 1000
@@ -163,9 +177,13 @@ class Runtime:
             self.guards[dec.id] = guards
         for g in guards:
             self._ledger({"kind": "guard", "decision_ref": dec.id, **g})
+        if executions:
+            self.executions[dec.id] = executions
+        for x in executions:
+            self._ledger({"kind": "execution", "decision_ref": dec.id, **x})
         self._ledger({"kind": "run", "record": rec.to_dict()})
         return {"run_id": rec.run["run_id"], "record": rec.to_dict(), "decision": dec.to_dict(), "result": res.to_dict(),
-                "intents": intents, "guards": guards}
+                "intents": intents, "guards": guards, "executions": executions}
 
     def _read_state(self, sid: str, request: "dict | None" = None):
         """정책 · CR 이 볼 상태와 그 출처(, 결정 문맥이 돌린 질의 결과). 꽂은 읽기가 무엇을 주든 사용 상태 이름과 스칼라 값만,

@@ -58,12 +58,13 @@ class Pipeline:
                  model: "str | None" = None, stream: bool = False, tool_mode: str = "text",
                  prompt_layout: "str | None" = None, preamble: str = "", cr: "ContextRuntime | None" = None,
                  recorder=None, provider_label: "str | None" = None, before_execute=None,
-                 after_decide=None):
+                 after_decide=None, dispatch_shadow=None):
         self.m, self.reg = manager, registry
         self.rec = recorder or NullRecorder()      # L0 Telemetry -- 무슨 일이 일어났나만(ms/l0.py)
         self.provider_label = provider_label       # L0 에 적을 provider 이름(런타임이 고른 이름 -- 모의면 sim-*)
         self.before_execute = before_execute       # 도구 실행 직전에 RunResult 로 불린다 -- 결정 기록을 실행 전에 짓는 자리(PC-19 G1)
         self.after_decide = after_decide           # 판마다 Arbiter 판정 직후(실행 전)에 (판, 제안, 맥락, 판정) -- Guard shadow 의 자리(CMD-M17)
+        self.dispatch_shadow = dispatch_shadow     # 도구 호출 바로 앞에서 (판, 제안, 결정 id) -- 실행기 shadow 의 자리(CMD-M20)
         self.provider = llm if isinstance(llm, LLMProvider) else CallableProvider(llm)
         self.llm = llm
         self.cr = cr or ContextRuntime(registry, policy, prompt_plan, prompt_layout, retrieve_max)
@@ -134,8 +135,11 @@ class Pipeline:
                     if nid not in retrieved:
                         retrieved.append(nid)
                 continue
-            if self.before_execute is not None:         # 실행 직전: 이 판까지의 제안 · 판정은 다 정해졌다
-                self.before_execute(res)
+            decision_ref = None
+            if self.before_execute is not None:         # 실행 직전: 이 판까지의 제안 · 판정은 다 정해졌다. 결정 id 를 돌려받는다(PC19 G1)
+                decision_ref = self.before_execute(res)
+            if self.dispatch_shadow is not None:
+                self.dispatch_shadow(i + 1, p, decision_ref)
             tool = self.reg.get(p.tool)                 # 여기 -- ALLOW 가지 안 -- 가 도구가 불리는 유일한 자리
             with self.rec.tool(tool.name, {"target": p.target, "args": p.args}, call_index=len(res.calls) - 1) as t:
                 try:
