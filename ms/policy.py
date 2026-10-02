@@ -155,7 +155,7 @@ PROMPT_SELECTORS = {c.version: c for c in (FixedPrompt(), AdaptivePrompt())}
 
 
 def replay(policy_record: dict) -> dict:
-    """실행 기록의 policy 칸(상태 · 판본 · 입력)으로 계획을 다시 계산한다. 같으면 {"ok": True}."""
+    """결정 기록(ms/decision_record.py -- 상태 · 판본 · 입력)으로 계획을 다시 계산한다. 같으면 {"ok": True}."""
     st = policy_record["state"]
     out, ok = {}, True
     c = policy_record["context_policy"]

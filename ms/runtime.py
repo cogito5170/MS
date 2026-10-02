@@ -26,6 +26,7 @@ from . import usage_model as U
 from .arbiter import DENY, Arbiter
 from .cr import VERSION as CR_VERSION, ContextRuntime
 from .pipeline import Pipeline
+from .decision_record import DecisionRecord
 from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt
 from .run_telemetry import RunRecord, cost_of
 from .tools import RETRIEVE
@@ -68,6 +69,7 @@ class Runtime:
         self.base_context = dict(BASE_CONTEXT, **(base_context or {}))
         self.prices, self.ledger_path, self.max_rounds, self.wall = prices, ledger_path, max_rounds, wall
         self.records: dict = {}
+        self.decisions: dict = {}
 
     def open_session(self, name: str, budgets: dict) -> str:
         return U.open_session(self.um, name, budgets)
@@ -88,14 +90,16 @@ class Runtime:
                         cr=ContextRuntime.from_plan(self.reg, plan))
         res = pipe.run(request["task"], request.get("queries", ()), max_rounds=request.get("max_rounds", self.max_rounds))
         total_ms = (self.wall() - t0) * 1000
-        rec = self._record(request, sid, state, cplan, pplan, choice, provider, res, total_ms)
+        dec, rec = self._record(request, sid, state, cplan, pplan, choice, provider, res, total_ms)
         U.link_provider(self.um, sid, choice["provider"])
         matched = res.rounds[0]["context"]["matched"] if res.rounds and "context" in res.rounds[0] else None
         for sig in rec.to_signals(sid, self.um.clock(), matched_rows=matched):
             self.um.ingest(sig)
         self.records[rec.run["run_id"]] = rec
+        self.decisions[dec.id] = dec
+        self._ledger({"kind": "decision", "decision": dec.to_dict()})     # 결정 먼저, 그 결정이 낳은 실행은 id 로 잇는다
         self._ledger({"kind": "run", "record": rec.to_dict()})
-        return {"run_id": rec.run["run_id"], "record": rec.to_dict(), "result": res.to_dict()}
+        return {"run_id": rec.run["run_id"], "record": rec.to_dict(), "decision": dec.to_dict(), "result": res.to_dict()}
 
     def feedback(self, run_id: str, user_correction: bool):
         """사람이 그 실행을 고쳤나. 그것도 텔레메트리다 -- correction_rate 상태가 여기서 나온다."""
@@ -108,7 +112,7 @@ class Runtime:
         return r
 
     # -- 기록 ---------------------------------------------------------------------------------------------------
-    def _record(self, request, sid, state, cplan, pplan, choice, provider, res, total_ms) -> RunRecord:
+    def _record(self, request, sid, state, cplan, pplan, choice, provider, res, total_ms) -> "tuple[DecisionRecord, RunRecord]":
         calls = res.calls
         decisions = [r["decision"] for r in res.rounds if "decision" in r]
         proposals = [r["proposal"] for r in res.rounds if "proposal" in r]
@@ -155,7 +159,12 @@ class Runtime:
             for k, v in (c["extensions"] or {}).items():
                 exts.setdefault(k, []).append(v)
         unsupported = sorted({u for c in calls for u in c["unsupported"]})
-        return RunRecord(
+        dec = DecisionRecord(
+            cr=CR_VERSION, state=state, context_policy=cplan, prompt_policy=pplan, provider_policy=choice,
+            arbiter_decision={"final": final, "all": [[d["verdict"], d["rule"]] for d in decisions]},
+            inputs={"base_context": self.base_context, "default_provider": self.provider_policy.default
+                    if isinstance(self.provider_policy, ExplicitProvider) else None})
+        return dec, RunRecord(
             run={"run_id": run_id, "session_id": request["session"], "provider": choice["provider"],
                  "model": calls[0]["model"] if calls else choice.get("model"), "timestamp": self.m.clock(),
                  "simulated": bool(getattr(provider, "simulated", False))},
@@ -165,11 +174,7 @@ class Runtime:
                          "non_progress_rounds": denies + retrievals},
             outcome={"task_success": check_success(self.m, request, res.executed), "user_correction": None,
                      "tool_success": tool_ok},
-            policy={"cr": CR_VERSION, "state": state, "context_policy": cplan, "prompt_policy": pplan,
-                    "provider_policy": choice,
-                    "arbiter_decision": {"final": final, "all": [[d["verdict"], d["rule"]] for d in decisions]},
-                    "inputs": {"base_context": self.base_context, "default_provider": self.provider_policy.default
-                               if isinstance(self.provider_policy, ExplicitProvider) else None}},
+            decision_ref=dec.id,
             cost=cost,
             estimated={"context_tokens": "input_tokens × context_chars/prompt_chars",
                        "retrieved_tokens": "input_tokens × retrieved_chars/prompt_chars"},

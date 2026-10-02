@@ -11,6 +11,7 @@ from dataclasses import fields, is_dataclass
 from ms import usage_model as U
 from ms.arbiter import ALLOW, DENY, Arbiter
 from ms.canonical import CanonicalPrompt, CanonicalRequest, CanonicalResponse, ToolCall, Usage
+from ms.decision_record import decision_id, linked
 from ms.context import COMPRESS, DEFER, DROP, KEEP, ContextPolicy
 from ms.graph import Node, StateGraph
 from ms.llm import ScriptedLLM, parse_proposal, proposal_from
@@ -240,7 +241,8 @@ class Normalization(unittest.TestCase):
         spec, m, reg, *_ = world()
         rt = Runtime(m, reg, {"sim-openai": make_provider("sim-openai")})
         rt.open_session("s", {"token_budget": 1000})
-        rec = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})["record"]
+        out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        rec, dec = out["record"], out["decision"]
         want = {"run": {"run_id", "session_id", "provider", "model", "timestamp", "simulated"},
                 "tokens": {"input_tokens", "output_tokens", "cached_input_tokens", "context_tokens",
                            "retrieved_tokens", "total_tokens"},
@@ -249,11 +251,14 @@ class Normalization(unittest.TestCase):
         for sec, keys in want.items():
             self.assertEqual(set(rec[sec]), keys, sec)
         self.assertLessEqual({"tool_calls", "retries", "context_retrievals"}, set(rec["interaction"]))
-        self.assertLessEqual({"context_policy", "prompt_policy", "provider_policy", "arbiter_decision"}, set(rec["policy"]))
+        self.assertLessEqual({"context_policy", "prompt_policy", "provider_policy", "arbiter_decision"}, set(dec))
+        self.assertNotIn("policy", rec)                                   # 결정 · 정책이 본 상태는 텔레메트리에 없다
+        self.assertFalse({"state", "context_policy", "arbiter_decision"} & set(rec))
+        self.assertTrue(linked(rec, dec))
         self.assertIn("context_tokens", rec["estimated"])                 # 추정은 추정이라고 적힌다
         self.assertEqual(primitives_only(rec), [])
         sigs = RunRecord(**{k: v for k, v in rec.items() if k != "schema"}).to_signals("session:s", 1.0)
-        self.assertFalse([s for s in sigs if s["signal"].split(".")[0] in ("extensions", "policy", "unsupported")])
+        self.assertFalse([s for s in sigs if s["signal"].split(".")[0] in ("extensions", "policy", "unsupported", "decision_ref")])
 
 
 # -- 4 · 5. LLM 은 그래프를 못 보고 질의가 허락한 것만 받는다 ----------------------------------------------------
@@ -450,18 +455,40 @@ class Reproducible(unittest.TestCase):
         rt.open_session("s", {"token_budget": 300, "context_budget": 200, "latency_budget_ms": 5000})
         out = []
         for _ in range(3):
-            out.append(rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})["record"])
+            out.append(rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})["decision"])
         return out
 
     def test_replay_matches(self):
         recs = self._records()
-        self.assertNotEqual(recs[0]["policy"]["context_policy"]["params"],     # 상태가 바뀌어 계획이 달라졌다(대조)
-                            recs[-1]["policy"]["context_policy"]["params"])
+        self.assertNotEqual(recs[0]["context_policy"]["params"],     # 상태가 바뀌어 계획이 달라졌다(대조)
+                            recs[-1]["context_policy"]["params"])
         for r in recs:
-            self.assertEqual(replay(json.loads(json.dumps(r["policy"])))["ok"], True)
+            self.assertEqual(replay(json.loads(json.dumps(r)))["ok"], True)
+
+    def test_run_record_links_to_decision_by_id_only(self):
+        """텔레메트리(RunRecord)에는 결정의 id 만, 결정 기록은 따로 원장에 -- 결정 먼저, 실행이 그 id 를 가리킨다."""
+        import tempfile
+        spec, m, reg, *_ = world()
+        with tempfile.TemporaryDirectory() as d:
+            lp = os.path.join(d, "ledger.jsonl")
+            rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")}, ledger_path=lp)
+            rt.open_session("s", {"token_budget": 300})
+            out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+            lines = [json.loads(x) for x in open(lp, encoding="utf-8")]
+        self.assertEqual([x["kind"] for x in lines], ["decision", "run"])
+        dec, rec = lines[0]["decision"], lines[1]["record"]
+        self.assertEqual(rec["decision_ref"], dec["id"])
+        self.assertTrue(linked(rec, dec))
+        self.assertEqual(rec["schema"], "ms-run-telemetry-3")
+        self.assertNotIn("state", json.dumps(rec))                       # 정책이 본 상태 이름조차 텔레메트리에 없다
+        bad = copy.deepcopy(dec)
+        bad["state"]["token_budget_pressure"] = "LOW"                     # 결정 기록을 고치면 잇기가 끊긴다
+        self.assertFalse(linked(rec, bad))
+        self.assertNotEqual(decision_id(bad), rec["decision_ref"])
+        self.assertTrue(linked(out["record"], out["decision"]))
 
     def test_replay_catches_tampering(self):
-        rec = self._records()[-1]["policy"]
+        rec = self._records()[-1]
         bad = copy.deepcopy(rec)
         bad["state"]["token_budget_pressure"] = "LOW"
         bad["state"]["context_pressure"] = "LOW"
@@ -516,9 +543,9 @@ class PromptText(unittest.TestCase):
         spec, m, reg, *_ = world()
         rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")})
         rt.open_session("s", {})
-        rec = rt.handle({"session": "s", "task": "t", "queries": spec["queries"]})["record"]
-        self.assertEqual(rec["policy"]["prompt_policy"]["template"], TEMPLATE_VERSION)   # 기본 배치의 판본
-        self.assertTrue(replay(rec["policy"])["ok"])
+        dec = rt.handle({"session": "s", "task": "t", "queries": spec["queries"]})["decision"]
+        self.assertEqual(dec["prompt_policy"]["template"], TEMPLATE_VERSION)   # 기본 배치의 판본
+        self.assertTrue(replay(dec)["ok"])
 
 
 class QualityStateNeedsTwoEvents(unittest.TestCase):
@@ -611,10 +638,11 @@ class CacheStableLayout(unittest.TestCase):
         rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")}, prompt_selector=AdaptivePrompt())
         rt.open_session("s", {"token_budget": 10, "context_budget": 10})
         rt.handle({"session": "s", "task": "t", "queries": spec["queries"]})
-        rec = rt.handle({"session": "s", "task": "t", "queries": spec["queries"]})["record"]
-        self.assertEqual(rec["policy"]["prompt_policy"]["plan"]["instruction_mode"], "concise")
+        out = rt.handle({"session": "s", "task": "t", "queries": spec["queries"]})
+        rec, dec = out["record"], out["decision"]
+        self.assertEqual(dec["prompt_policy"]["plan"]["instruction_mode"], "concise")
         self.assertTrue(any("instruction_mode=concise" in u for u in rec["unsupported"]))
-        self.assertEqual(rec["policy"]["prompt_policy"]["template"], "prompt-text-4")
+        self.assertEqual(dec["prompt_policy"]["template"], "prompt-text-4")
 
 
 class ContextRuntimeBoundary(unittest.TestCase):
@@ -636,12 +664,12 @@ class ContextRuntimeBoundary(unittest.TestCase):
         out = None
         for _ in range(3):
             out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
-        self.assertEqual(out["record"]["policy"]["cr"], "cr-1")
+        self.assertEqual(out["decision"]["cr"], "cr-1")
         for c in out["result"]["calls"]:
             self.assertEqual(c["cd"]["cr"], "cr-1")
             self.assertEqual(len(c["cd"]["prefix_hash"]), 12)
             self.assertIn("stats", c["cd"])
-        self.assertTrue(replay(out["record"]["policy"])["ok"])
+        self.assertTrue(replay(out["decision"])["ok"])
 
     def test_prefix_hash_tracks_cache_prefix(self):
         from ms.cr import ContextRuntime
