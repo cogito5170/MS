@@ -4,7 +4,7 @@
     Session   (id "session:<이름>")  한 사용 흐름. 여기서 아래 여덟 상태가 나온다
     Provider  (id "provider:<이름>") 세션이 쓴 provider. 관계 `uses`(Session -> Provider, N:N)
 
-Session 의 속성은 전부 **evidence** 다 -- 그래프(→ 질의 → LLM)에 안 들어간다. 그래프에 사는 것은 파생 상태뿐이다:
+Session 의 속성은 전부 **측정 창(measurement)** 이다 -- 그래프(→ 질의 → LLM)에 안 들어간다. 그래프에 사는 것은 파생 상태뿐이다:
 
     상태                    해석(모형이 정한 뜻)
     token_budget_pressure   마지막 실행의 input_tokens 가 token_budget 의 0.9 배 이상 HIGH · 0.6 배 이상 MEDIUM · 아니면 LOW
@@ -38,8 +38,8 @@ STATES = ("token_budget_pressure", "context_pressure", "latency_pressure", "task
 
 
 def _ev(type_="number", window=1, agg="last", **kw):
-    return dict(type=type_, role="evidence", window=window, agg=agg, min=0, **kw) if type_ in ("number", "integer") \
-        else dict(type=type_, role="evidence", window=window, agg=agg, **kw)
+    return dict(type=type_, role="measurement", window=window, agg=agg, min=0, **kw) if type_ in ("number", "integer") \
+        else dict(type=type_, role="measurement", window=window, agg=agg, **kw)
 
 
 def _three(prop, ref, hi, mid, names=("HIGH", "MEDIUM", "LOW")):
@@ -51,7 +51,7 @@ def _three(prop, ref, hi, mid, names=("HIGH", "MEDIUM", "LOW")):
 
 SESSION = {
     "name": "Session",
-    "description": "LLM 사용 흐름 하나. 속성은 전부 evidence, 상태는 파생만",
+    "description": "LLM 사용 흐름 하나. 속성은 전부 측정 창, 상태는 파생만",
     "properties": {
         # 마지막 실행 (window 1)
         "input_tokens": _ev("integer"), "context_tokens": _ev("integer"), "matched_rows": _ev("integer"),
@@ -60,7 +60,7 @@ SESSION = {
         "non_progress_rounds": _ev("number", 5, "mean"),
         "proposal_invalid": _ev("number", 5, "mean"), "arbiter_denies": _ev("number", 5, "mean"),
         "user_correction": _ev("bool", 10, "mean"),
-        # 상태를 정하는 데 안 쓰지만 모형이 아는 것(그래야 격리함이 아니라 evidence 로 간다)
+        # 상태를 정하는 데 안 쓰지만 모형이 아는 것(그래야 격리함이 아니라 측정 창으로 간다)
         "output_tokens": _ev("integer"), "cached_input_tokens": _ev("integer"), "retrieved_tokens": _ev("integer"),
         "total_tokens": _ev("integer"), "ttft_ms": _ev("number"), "inference_ms": _ev("number"),
         "tool_calls": _ev("number", 5, "mean"), "context_retrievals": _ev("number", 5, "mean"),

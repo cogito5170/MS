@@ -33,11 +33,11 @@ Telemetry → State → CR(맥락) → Provider → LLM → Arbiter
 | | 묻는 것 | MS 에서 | 예 |
 |---|---|---|---|
 | **Telemetry** | 무슨 일이 일어났는가 | `Telemetry` · `RunRecord` — 뜻이 없는 기록. 그래프에 바로 못 들어간다 | `input_tokens = 18000` · `cpu_temp_f = 197.6` |
-| **State** | Model 에 의해 지금 무엇을 의미하는가 | `Model` 이 해석해 `StateGraph` 에 둔 것. 원 측정(evidence)은 그래프 밖 | `token_budget_pressure = HIGH` · `srv07.status = critical` |
+| **State** | Model 에 의해 지금 무엇을 의미하는가 | `Model` 이 해석해 `StateGraph` 에 둔 것. 원 측정(측정 창, `measurement`)은 그래프 밖 | `token_budget_pressure = HIGH` · `srv07.status = critical` |
 | **Policy** | 지금 State 에서 무엇을 할 것인가 | `policy.py` 의 선택기 — (State, 판본)의 순수 함수 | 예산 ×0.5 · COMPRESS · 지시 concise |
 
 `input_tokens / token_budget ≥ 0.9` 를 `HIGH` 로 읽는 것은 **모형**이다(`usage_model.py`). 토큰 수 자체는 상태 그래프에 **없다** —
-모형의 `evidence` 창에만 있고, 질의로도(→ LLM 으로도) 안 보인다.
+모형의 측정 창(`measurement`, 옛 이름 evidence)에만 있고, 질의로도(→ LLM 으로도) 안 보인다.
 
 ## 구조
 
@@ -80,7 +80,7 @@ State Manager          manager.StateManager              Model 이 해석 → �
 | 계층 | 하는 일 | **못 하는 일** (시험이 붙든다) |
 |---|---|---|
 | State Manager | 텔레메트리를 모형으로 해석해 그래프에. 모르는 신호 · 범위 밖 · 늦은 관측은 격리 | 모형 없이 상태를 만들기 |
-| Model (`model.py` · `usage_model.py`) | 신호 → 속성(변환 · 단위 · 범위 · ttl), 속성 → 파생 상태, `evidence` 창(window · agg) | 입력이 없는데 기본값으로 메우기 — 모르면 **모름** |
+| Model (`model.py` · `usage_model.py`) | 신호 → 속성(변환 · 단위 · 범위 · ttl), 속성 → 파생 상태, 측정 창 `measurement`(window · agg) | 입력이 없는데 기본값으로 메우기 — 모르면 **모름** |
 | State Query | 고른 속성 · 결과 안 개체끼리의 관계만 | 그래프 전체를 내기 |
 | Context Policy | 질의 결과 → 최소 맥락. 예산은 **실제로 그려진 글자 수**에 | must 행을 빼거나 미루기 · 행을 조용히 버리기 |
 | Prompt Policy | 맥락을 어떻게 말할지 | 도구를 **넓히기**(좁히기만 된다) · 중재자를 바꾸기(import 조차 안 한다) |
@@ -156,7 +156,7 @@ provider 계획 · 중재 결정 · 재현 입력은 `DecisionRecord` 에 있고
 
 ## State — 사용의 모형 (`usage_model.py`)
 
-세션 하나의 원 측정은 전부 `evidence` 이고, 그래프에는 여덟 상태만 산다. **문턱은 잰 것이 아니라 손으로 둔 것이다** (`MODEL_VERSION`).
+세션 하나의 원 측정은 전부 측정 창(`measurement`)이고, 그래프에는 여덟 상태만 산다. **문턱은 잰 것이 아니라 손으로 둔 것이다** (`MODEL_VERSION`).
 
 | 상태 | 모형의 해석 |
 |---|---|
@@ -263,6 +263,6 @@ rt.feedback(out["run_id"], user_correction=False)     # 사람의 고침도 텔�
 - 상태의 문턱 · 정책의 규칙은 손으로 둔 것이다. 바꾸면 판본을 올린다 — 재현이 판본을 본다.
 - Gemini 의 JSON 스키마 강제 필드는 확인하지 못해 쓰지 않는다. Gemini 2.5 의 `thinkingBudget` 은 수준을 토큰 수로 바꿔야 해서 쓰지 않는다.
 - OpenAI 의 `reasoning.effort` 는 추론 모형에서만 받는다 — 어댑터는 모형 목록을 추측하지 않고 그대로 보낸다(거절되면 그 실행이 오류).
-- 한 판에 제안 하나. 그래프 · evidence 는 메모리에만. 스레드 안전하지 않다.
+- 한 판에 제안 하나. 그래프 · 측정 창은 메모리에만. 스레드 안전하지 않다.
 - 선행조사: [`paper/선행조사/MS.md`](paper/선행조사/MS.md) (모형 · 그래프 · 중재자) · [`paper/선행조사/정책런타임.md`](paper/선행조사/정책런타임.md)
   (가장 가까운 것: *Beyond Token Savings*, arXiv:2609.32961 — 같은 물음. **전문을 안 읽었다**).

@@ -440,7 +440,7 @@ class ProviderCannotChangeSemantics(unittest.TestCase):
         node = m.graph.nodes["session:s"]
         self.assertNotIn("input_tokens", node.props)
         self.assertTrue(all(v.derived for v in node.props.values()))
-        self.assertIsNotNone(m.evidence_value("session:s", "input_tokens"))
+        self.assertIsNotNone(m.measurement_value("session:s", "input_tokens"))
         rows = run_query(StateQuery("q", ids=["session:s"]), m).rows[0].props
         self.assertNotIn("input_tokens", rows)
         self.assertIn("token_budget_pressure", rows)
@@ -778,6 +778,37 @@ class ContextActions(unittest.TestCase):
         self.assertEqual(set(ctx.decisions), ids)
 
 
+class MeasurementWindowName(unittest.TestCase):
+    """PC-04 · BD-06: MS 의 원 측정 창은 `measurement` 다. Evidence 는 근거 참조의 이름이라 쓰지 않는다."""
+
+    def test_usage_model_uses_measurement_role(self):
+        self.assertEqual({p["role"] for p in U.SESSION["properties"].values()}, {"measurement"})
+
+    def test_old_role_name_is_read_as_measurement(self):
+        from ms.model import Model
+        m = Model.from_dict({"name": "X", "properties": {"a": {"type": "number", "role": "evidence", "window": 3, "agg": "mean"}}})
+        self.assertEqual(m.properties["a"].role, "measurement")
+
+    def test_ms_code_does_not_use_the_old_name(self):
+        """`StateManager.evidence` 는 DC 가 아직 읽어서 남긴 별칭이다. MS 안에서는 아무도 그것을 읽지 않는다."""
+        hits = []
+        for root, _, files in os.walk(os.path.join(ROOT, "ms")):
+            for f in files:
+                if f.endswith(".py"):
+                    tree = ast.parse(open(os.path.join(root, f), encoding="utf-8").read())
+                    hits += [f"{f}:{n.lineno}" for n in ast.walk(tree)
+                             if isinstance(n, ast.Attribute) and n.attr in ("evidence", "evidence_value")]
+                    hits += [f"{f}:{n.lineno}" for n in ast.walk(tree)
+                             if isinstance(n, ast.Constant) and n.value == "evidence" and f != "model.py"]
+        self.assertEqual(hits, [])
+
+    def test_alias_is_the_same_window(self):
+        m = StateManager(clock=Clock())
+        U.open_session(m, "s", {"token_budget": 10})
+        self.assertIs(m.evidence, m.measurements)
+        self.assertIn("token_budget", m.measurements["session:s"])
+
+
 class OneClock(unittest.TestCase):
     """PC-12: 시계는 하나다 -- State Manager 에 주입한 것. 텔레메트리는 시계를 읽지 않고, Runtime 은 두 시계를 거절한다."""
 
@@ -793,7 +824,7 @@ class OneClock(unittest.TestCase):
         self.assertEqual(out["record"]["run"]["timestamp"], 1234.0)
         self.assertEqual(r.status, "applied")
         self.assertEqual(m.graph.nodes["srv01"].props["temp_c"].ts, 1234.0)        # 받을 때 주입된 시계로 찍혔다
-        self.assertTrue(all(v.ts == 1234.0 for w in m.evidence["session:s"].values() for v in w))
+        self.assertTrue(all(v.ts == 1234.0 for w in m.measurements["session:s"].values() for v in w))
 
     def test_telemetry_does_not_stamp_itself(self):
         from ms.telemetry import Telemetry
@@ -826,8 +857,8 @@ class SuccessIsJudgedOutside(unittest.TestCase):
         rt, m, out = self._run()
         self.assertIn("throttle", [e["tool"] for e in out["result"]["executed"]])   # 대조: 기준대로라면 성공이었다
         self.assertIsNone(out["record"]["outcome"]["task_success"])
-        self.assertIsNone(rt.um.evidence_value("session:s", "task_success"))     # 성공 관측이 들어가지 않았다
-        self.assertIsNotNone(rt.um.evidence_value("session:s", "tool_success"))  # 대조: 다른 결과 관측은 들어갔다
+        self.assertIsNone(rt.um.measurement_value("session:s", "task_success"))     # 성공 관측이 들어가지 않았다
+        self.assertIsNotNone(rt.um.measurement_value("session:s", "tool_success"))  # 대조: 다른 결과 관측은 들어갔다
 
     def test_evaluation_is_an_outside_observation(self):
         import tempfile
@@ -837,7 +868,7 @@ class SuccessIsJudgedOutside(unittest.TestCase):
             run_id = out["run_id"]
             r = rt.evaluation(run_id, False)
             self.assertEqual(r.status, "applied")
-            self.assertEqual(rt.um.evidence_value("session:s", "task_success"), 0.0)
+            self.assertEqual(rt.um.measurement_value("session:s", "task_success"), 0.0)
             self.assertIs(rt.records[run_id].outcome["task_success"], False)
             with self.assertRaises(ValueError):                                # 한 실행에 한 번만
                 rt.evaluation(run_id, True)
@@ -882,7 +913,7 @@ class Harness(unittest.TestCase):
             row = lane.run_task(task, log=lambda *a: None)
             judged += 1 + (row["success_after_correction"] is not None)
         sid = U.session_id(lane.sess)
-        self.assertEqual(len(lane.usage.evidence[sid]["task_success"]), judged)
+        self.assertEqual(len(lane.usage.measurements[sid]["task_success"]), judged)
 
     def test_interleaved_order(self):
         from ms.eval import evaluate
