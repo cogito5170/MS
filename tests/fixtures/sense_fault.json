@@ -1,0 +1,175 @@
+{
+ "cls": "edit",
+ "telemetry": {
+  "T": 1500,
+  "T_out": 300,
+  "turns": 1,
+  "L": 2,
+  "E": 1,
+  "R": 0,
+  "latency": 1.7404556274414062e-05,
+  "missing_results": 0
+ },
+ "readings": [
+  {
+   "sensor": "execution",
+   "status": "FAULT",
+   "why": "마지막 호출이 실패로 남은 겨냥 1/2 · 썼다는데 없는 파일 1",
+   "value": 0.5,
+   "detail": {
+    "calls": 2,
+    "counted": 2,
+    "targets": 2,
+    "errors": 1,
+    "unresolved": [
+     "Bash:pytest"
+    ],
+    "no_result": [],
+    "written_but_missing": [
+     "/secret/path/never_written.py"
+    ]
+   }
+  },
+  {
+   "sensor": "constraint",
+   "status": "FAULT",
+   "why": "위반 1: $.rows: 형 str != integer",
+   "value": 1.0,
+   "detail": {
+    "violations": [
+     "$.rows: 형 str != integer"
+    ],
+    "unsupported": []
+   }
+  },
+  {
+   "sensor": "consistency",
+   "status": "FAULT",
+   "why": "완료를 말하는데 마지막 검증이 실패했다 (false success)",
+   "value": null,
+   "detail": {
+    "claim": {
+     "sensor": "consistency.claim",
+     "status": "FAULT",
+     "why": "완료를 말하는데 마지막 검증이 실패했다 (false success)",
+     "value": 1.0,
+     "detail": {
+      "claim": true,
+      "verifications": 1,
+      "last_ok": false
+     }
+    },
+    "numbers": {
+     "sensor": "consistency.numbers",
+     "status": "UNKNOWN",
+     "why": "답에 잴 수가 없다",
+     "value": null,
+     "detail": {}
+    },
+    "agreement": {
+     "sensor": "consistency.agreement",
+     "status": "UNKNOWN",
+     "why": "비교할 다른 답이 없다",
+     "value": null,
+     "detail": {}
+    }
+   }
+  },
+  {
+   "sensor": "behavior",
+   "status": "OK",
+   "why": "고리 없음 · 재시도 0",
+   "value": null,
+   "detail": {
+    "loop": {
+     "sensor": "behavior.loop",
+     "status": "OK",
+     "why": "고리 없음",
+     "value": 0.0,
+     "detail": {
+      "max_same_call_same_output": 1,
+      "max_same_call": 1,
+      "oscillation_cycles": 0
+     }
+    },
+    "tokens": {
+     "sensor": "behavior.tokens",
+     "status": "UNKNOWN",
+     "why": "성능모형이 없거나 토큰 기록이 없다",
+     "value": null,
+     "detail": {}
+    },
+    "retry": {
+     "sensor": "behavior.retry",
+     "status": "OK",
+     "why": "재시도 0",
+     "value": 0.0,
+     "detail": {
+      "R": 0
+     }
+    },
+    "telemetry": {
+     "T": 1500,
+     "T_out": 300,
+     "turns": 1,
+     "L": 2,
+     "E": 1,
+     "R": 0,
+     "latency": 1.7404556274414062e-05,
+     "missing_results": 0
+    }
+   }
+  },
+  {
+   "sensor": "outcome",
+   "status": "FAULT",
+   "why": "`/usr/local/bin/python3 -c print('SECRET_STDOUT_TOKEN'); raise SystemExit(1)` 종료 1",
+   "value": 0.0,
+   "detail": {
+    "returncode": 1,
+    "seconds": 0.013,
+    "tail": "SECRET_STDOUT_TOKEN\n"
+   }
+  }
+ ],
+ "residual": {
+  "expected": {},
+  "missing": [
+   "T",
+   "R",
+   "E"
+  ],
+  "r_V": 1.0,
+  "r_V_from": [
+   "constraint",
+   "outcome",
+   "consistency.claim"
+  ],
+  "R_sys": 2.0,
+  "parts": {
+   "V": 1.0
+  }
+ },
+ "fusion": {
+  "Q": 0.00010798833725957603,
+  "prior": 0.5,
+  "log_lr": {
+   "execution": -1.6094379124341003,
+   "constraint": -2.3025850929940455,
+   "consistency": -1.8971199848858813,
+   "behavior": 0.1823215567939546,
+   "outcome": -3.506557897319982
+  },
+  "calibrated": false,
+  "evidence": 5
+ },
+ "verdict": {
+  "action": "RETRY",
+  "rule": 1,
+  "reasons": [
+   "outcome: `/usr/local/bin/python3 -c print('SECRET_STDOUT_TOKEN'); raise SystemExit(1)` 종료 1",
+   "constraint: 위반 1: $.rows: 형 str != integer"
+  ],
+  "policy": {}
+ }
+}

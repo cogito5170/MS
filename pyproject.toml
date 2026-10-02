@@ -10,6 +10,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
 
+[project.optional-dependencies]
+# 선택 의존 -- MS 는 Sensor 를 import 하지 않는다(계약은 sense() 출력의 데이터 꼴). 깔면 sense() 를 바로 부를 수 있을 뿐이다
+sensor = ["llmsensor @ git+https://github.com/cogito5170/Sensor"]
+
 [project.scripts]
 ms = "ms.cli:main"
 

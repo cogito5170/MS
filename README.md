@@ -23,6 +23,9 @@ Telemetry → State → CR(맥락) → Provider → LLM → Arbiter
 > 매 요청 무엇을 보이고 어떻게 말할지 정하는 런타임이고, 그 결정을 Context Decision(CD)이라 부른다. 코드는 `ms/cr.py` 한 곳으로 모였다.
 > 지금은 에이전트가 MS 안에서 맡고 나중에 독립 계층으로 옮긴다. 역할 기록 [`docs/역할.md`](docs/역할.md) · 앞으로의 계획 [`docs/계획.md`](docs/계획.md).
 
+> **Sensor 배선(②, 2026-10-02)**: `ms/sensing.py` 가 llmsensor 의 `sense()` 출력을 텔레메트리 신호로만 편다 -- 측정 · 관측 · 잔차는
+> 수만 받고, Sensor 의 추정(Q) · 판정은 받지 않는다. `pip install ".[sensor]"` 로 Sensor 를 함께 깔 수 있다(선택).
+
 ## 세 가지를 섞지 않는다
 
 | | 묻는 것 | MS 에서 | 예 |
@@ -209,7 +212,7 @@ python3 -m ms ask ms/examples/datacenter.json --telemetry ms/examples/datacenter
 python3 -m ms ask ... --provider claude --model claude-opus-5-5 --stream     # ANTHROPIC_API_KEY
 python3 -m ms ask ... --provider openai --model <모형>                        # OPENAI_API_KEY (모형 기본값을 지어내지 않는다)
 python3 -m ms ask ... --provider sim-gemini                                   # 모의 -- 배선 확인
-python3 -m unittest tests.test_ms tests.test_runtime                          # 102 개
+python3 -m unittest tests.test_ms tests.test_runtime tests.test_sensing      # 115 개
 ```
 
 ```python
