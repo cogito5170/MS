@@ -1,0 +1,63 @@
+{
+ "runs": [
+  967,
+  968
+ ],
+ "paired": 967,
+ "by_source": {
+  "tests": {
+   "table": {
+    "dc L0 같음": 47,
+    "dc Sensor 같음": 47,
+    "dc 결정 id 같음": 47,
+    "dc 관측 같음": 47,
+    "dc 도구 실행": 44,
+    "dc 실행": 47,
+    "dc 실행기 못 감: 의도가 없다": 2,
+    "snapshot L0 같음": 437,
+    "snapshot Sensor 같음": 437,
+    "snapshot 결정 id 같음": 437,
+    "snapshot 관측 같음": 437,
+    "snapshot 도구 실행": 396,
+    "snapshot 실행": 437
+   },
+   "diffs": []
+  },
+  "sim": {
+   "table": {
+    "dc L0 같음": 480,
+    "dc Sensor 같음": 480,
+    "dc 결정 id 같음": 480,
+    "dc 관측 같음": 480,
+    "dc 도구 실행": 464,
+    "dc 실행": 480
+   },
+   "diffs": []
+  },
+  "scripted": {
+   "table": {
+    "dc L0 같음": 3,
+    "dc Sensor 같음": 3,
+    "dc 결정 id 같음": 3,
+    "dc 관측 같음": 3,
+    "dc 도구 실행": 3,
+    "dc 실행": 3
+   },
+   "diffs": []
+  }
+ },
+ "one_side": {
+  "before_only": [],
+  "after_only": [
+   "tests.test_runtime.ExecutorWiring.test_refused_by_the_executor_falls_back_without_losing_the_run#1"
+  ]
+ },
+ "versions": {
+  "ms": "c016354",
+  "DC": "b55ff04",
+  "action": "2f4791e(패키지 코드 = 3995fdb)",
+  "guard": "4bd7d14",
+  "Telemetry": "89d2887",
+  "Sensor": "a073e77"
+ }
+}

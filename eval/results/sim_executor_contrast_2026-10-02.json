@@ -1,37 +1,37 @@
 {
  "tests": {
-  "dc_runs": 49,
-  "executed": 46,
+  "dc_runs": 52,
+  "executed": 49,
   "table": {
-   "같음": 43,
+   "같음": 45,
    "실행 없음 · 명령 없음": 3,
    "명령 없음": 2,
-   "shadow 꺼짐(시험이 끈 것)": 1
+   "실행기 꺼짐(시험이 끈 것)": 2
   },
   "no_command_why": {
-   "의도가 없다": 2
+   "?": 2
   },
   "material_vs_guard": {
    "Guard DENY(E)": 11,
    "Guard 없음": 3,
    "Guard DENY(D)": 5,
-   "같음": 24
+   "같음": 26
   },
   "diffs": []
  },
  "tests_real_dc": {
-  "dc_runs": 37,
-  "executed": 35,
+  "dc_runs": 40,
+  "executed": 38,
   "table": {
-   "같음": 34,
-   "shadow 꺼짐(시험이 끈 것)": 1,
+   "같음": 36,
+   "실행기 꺼짐(시험이 끈 것)": 2,
    "실행 없음 · 명령 없음": 2
   },
   "no_command_why": {},
   "material_vs_guard": {
    "Guard 없음": 3,
    "Guard DENY(D)": 5,
-   "같음": 24,
+   "같음": 26,
    "Guard DENY(E)": 2
   },
   "diffs": []
@@ -45,7 +45,7 @@
    "명령 없음": 2
   },
   "no_command_why": {
-   "의도가 없다": 2
+   "?": 2
   },
   "material_vs_guard": {
    "Guard DENY(E)": 9
@@ -67,10 +67,11 @@
   "diffs": []
  },
  "versions": {
-  "ms": "be561c9",
-  "DC": "e473c76",
+  "ms": "c016354",
+  "DC": "b55ff04",
   "action": "2f4791e(패키지 코드 = 3995fdb)",
   "guard": "4bd7d14",
-  "Telemetry": "89d2887"
+  "Telemetry": "89d2887",
+  "Sensor": "a073e77"
  }
 }

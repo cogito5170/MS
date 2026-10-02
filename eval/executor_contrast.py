@@ -58,7 +58,7 @@ def _tally(rows) -> dict:
     why, vs, diffs = collections.Counter(), collections.Counter(), []
     for r in rows:
         if not r["dispatch_on"]:
-            t["shadow 꺼짐(시험이 끈 것)"] += 1
+            t["실행기 꺼짐(시험이 끈 것)"] += 1
             continue
         actual = [(e["tool"], e["target"], r["decision"]) for e in r["executed"]]
         disp = [(x["execution"]["would_dispatch"]["action_type"], x["execution"]["would_dispatch"]["target"],
