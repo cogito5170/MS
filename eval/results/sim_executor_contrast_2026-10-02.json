@@ -1,32 +1,38 @@
 {
  "tests": {
-  "dc_runs": 47,
-  "executed": 44,
+  "dc_runs": 49,
+  "executed": 46,
   "table": {
-   "명령 없음": 18,
+   "같음": 43,
    "실행 없음 · 명령 없음": 3,
-   "shadow 꺼짐(시험이 끈 것)": 3,
-   "같음": 23
+   "명령 없음": 2,
+   "shadow 꺼짐(시험이 끈 것)": 1
   },
   "no_command_why": {
-   "Guard DENY(E) -- 명령 재료가 없다": 11,
-   "의도가 없다": 2,
-   "Guard DENY(D) -- 명령 재료가 없다": 5
+   "의도가 없다": 2
+  },
+  "material_vs_guard": {
+   "Guard DENY(E)": 11,
+   "Guard 없음": 3,
+   "Guard DENY(D)": 5,
+   "같음": 24
   },
   "diffs": []
  },
  "tests_real_dc": {
-  "dc_runs": 35,
-  "executed": 33,
+  "dc_runs": 37,
+  "executed": 35,
   "table": {
-   "shadow 꺼짐(시험이 끈 것)": 3,
-   "명령 없음": 7,
-   "같음": 23,
+   "같음": 34,
+   "shadow 꺼짐(시험이 끈 것)": 1,
    "실행 없음 · 명령 없음": 2
   },
-  "no_command_why": {
-   "Guard DENY(D) -- 명령 재료가 없다": 5,
-   "Guard DENY(E) -- 명령 재료가 없다": 2
+  "no_command_why": {},
+  "material_vs_guard": {
+   "Guard 없음": 3,
+   "Guard DENY(D)": 5,
+   "같음": 24,
+   "Guard DENY(E)": 2
   },
   "diffs": []
  },
@@ -34,12 +40,15 @@
   "dc_runs": 12,
   "executed": 11,
   "table": {
-   "명령 없음": 11,
-   "실행 없음 · 명령 없음": 1
+   "같음": 9,
+   "실행 없음 · 명령 없음": 1,
+   "명령 없음": 2
   },
   "no_command_why": {
-   "Guard DENY(E) -- 명령 재료가 없다": 9,
    "의도가 없다": 2
+  },
+  "material_vs_guard": {
+   "Guard DENY(E)": 9
   },
   "diffs": []
  },
@@ -47,19 +56,20 @@
   "dc_runs": 480,
   "executed": 464,
   "table": {
-   "같음": 432,
-   "명령 없음": 32,
+   "같음": 464,
    "실행 없음 · 명령 없음": 16
   },
-  "no_command_why": {
-   "Guard DENY(D) -- 명령 재료가 없다": 32
+  "no_command_why": {},
+  "material_vs_guard": {
+   "같음": 432,
+   "Guard DENY(D)": 32
   },
   "diffs": []
  },
  "versions": {
-  "ms": "2b57b77 + 대조 스크립트의 가르기",
-  "DC": "ce3a0bc",
-  "action": "0071ddf(작업 사본) · 2f4791e(옆 저장소 초록 확인)",
+  "ms": "be561c9",
+  "DC": "e473c76",
+  "action": "2f4791e(패키지 코드 = 3995fdb)",
   "guard": "4bd7d14",
   "Telemetry": "89d2887"
  }
