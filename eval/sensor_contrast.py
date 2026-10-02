@@ -54,6 +54,14 @@ def _sensor(events) -> dict:
             "identical_call_max": metric("identical_call_max"), "tool_errors": metric("tool_errors")}
 
 
+def fresh_ids():
+    """관측 id 는 프로세스 전역 셈이고 DC provenance(따라서 결정 문맥 id · 결정 id)에 든다(BD-104 의 3). before 는 실행기 시험
+    몇이 중간에 멈춰 셈이 어긋난다 -- 그래서 일(시험 · 묶음 · 대본)마다 처음부터 센다. 두 쪽이 같은 일을 같은 셈에서 시작한다."""
+    import itertools
+    import ms.telemetry
+    ms.telemetry._ids = itertools.count(1)
+
+
 def one_pass(mode: str) -> list:
     _paths()
     from unittest import mock
@@ -74,6 +82,7 @@ def one_pass(mode: str) -> list:
         return Recorder(run_id, sinks[run_id], source=source, hasher=Hasher(KEY))
 
     rows = []
+    current = {"key": "?", "n": 0}                   # 지금 도는 시험(짝짓기 열쇠). 시험이 실행 몇 번째인지도 센다
     orig = R.Runtime.handle
 
     def handle(self, request):
@@ -81,7 +90,8 @@ def one_pass(mode: str) -> list:
         ev = sinks.pop(out["run_id"], None)
         if ev is not None:
             ev = list(ev.events)
-            rows.append({"decision": out["decision"]["id"], "dc": bool(intent.dc_id(out["decision"]["state_source"])),
+            current["n"] += 1
+            rows.append({"key": f"{current['key']}#{current['n']}", "decision": out["decision"]["id"], "dc": bool(intent.dc_id(out["decision"]["state_source"])),
                          "executed": out["result"]["executed"], "ingested": out["result"]["ingested"],
                          "l0": [e["type"] for e in ev], "sensor": _sensor(ev) if ev else None,
                          "fallback": [x["fallback"] for x in out.get("executions", []) if "fallback" in x]})
@@ -95,7 +105,13 @@ def one_pass(mode: str) -> list:
     try:
         os.chdir(ROOT)
         suite = unittest.defaultTestLoader.discover(os.path.join(ROOT, "tests"), top_level_dir=ROOT)
-        res = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
+
+        class Result(unittest.TextTestResult):
+            def startTest(self, test):
+                current.update(key=test.id(), n=0)
+                fresh_ids()
+                super().startTest(test)
+        res = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0, resultclass=Result).run(suite)
         n_tests = len(rows)
         print(f"[{mode}] 시험 {res.testsRun} · 실패 {len(res.failures)} · 오류 {len(res.errors)} · 모은 실행 {n_tests}",
               file=sys.stderr)
@@ -104,6 +120,7 @@ def one_pass(mode: str) -> list:
                   file=sys.stderr)
         from ms.eval import CONFIGS, evaluate
         for t in ("eval/tasks/datacenter.json", "eval/tasks/datacenter_tasks3.json"):
+            fresh_ids()
             evaluate(os.path.join(ROOT, t), {"openai": "sim-openai", "claude": "sim-claude"}, configs=tuple(CONFIGS),
                      reps=2, seed=3, log=lambda *a: None, state_reader="dc")
         n_sim = len(rows)
@@ -113,6 +130,8 @@ def one_pass(mode: str) -> list:
             p.stop()
     for i, r in enumerate(rows):
         r["source"] = "tests" if i < n_tests else "sim" if i < n_sim else "scripted"
+        if r["source"] != "tests":
+            r["key"] = f"{r['source']}#{i - (n_tests if r['source'] == 'sim' else n_sim)}"
     return rows
 
 
@@ -134,6 +153,7 @@ def scripted():
     with open(os.path.join(ex, "datacenter.json"), encoding="utf-8") as fh:
         spec = json.load(fh)
     for name, handler in FAULTS.items():
+        fresh_ids()
         m = StateManager.from_spec(spec, clock=itertools.repeat(spec["now"]).__next__)
         with open(os.path.join(ex, "datacenter_telemetry.jsonl"), encoding="utf-8") as fh:
             for line in fh:
@@ -149,14 +169,15 @@ def scripted():
 
 
 def compare(before: list, after: list) -> dict:
-    rep = {"runs": [len(before), len(after)], "by_source": {}}
-    if len(before) != len(after):
-        rep["error"] = "실행 수가 다르다"
-        return rep
+    """짝은 (시험 id, 그 시험 안의 몇 번째 실행) -- 모의 · 일부러 낸 실행은 차례. before 는 실행기를 꺼서 실행기 시험 몇이
+    중간에 멈춘다(그 시험의 실행은 한쪽에만 있다). 한쪽에만 있는 실행은 `one_side` 에 시험 이름과 함께 적는다."""
+    B, A = {r["key"]: r for r in before}, {r["key"]: r for r in after}
+    rep = {"runs": [len(before), len(after)], "paired": len(set(B) & set(A)), "by_source": {},
+           "one_side": {"before_only": sorted(set(B) - set(A)), "after_only": sorted(set(A) - set(B))}}
     for src in ("tests", "sim", "scripted"):
         t = collections.Counter()
         diffs = []
-        for b, a in ((b, a) for b, a in zip(before, after) if b["source"] == src):
+        for b, a in ((B[k], A[k]) for k in sorted(set(B) & set(A)) if A[k]["source"] == src):
             path = "dc" if a["dc"] else "snapshot"
             t[f"{path} 실행"] += 1
             if a["executed"]:
@@ -199,7 +220,9 @@ def main(argv) -> int:
         with open(argv[1], "w", encoding="utf-8") as f:
             json.dump(rep, f, ensure_ascii=False, indent=1)
     bad = sum(v for s in rep.get("by_source", {}).values() for k, v in s["table"].items() if k.endswith("다름"))
-    return 1 if bad or "error" in rep else 0
+    lost = [k for k in rep["one_side"]["before_only"] + rep["one_side"]["after_only"]
+            if ".ExecutorWiring." not in k]       # 한쪽에만 있어도 되는 것은 before 에서 실행기를 꺼서 멈춘 실행기 시험뿐
+    return 1 if bad or lost else 0
 
 
 if __name__ == "__main__":
