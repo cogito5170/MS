@@ -1,4 +1,4 @@
-"""한 바퀴 -- 질의 -> 맥락 정책 -> 프롬프트 정책 -> provider -> 응답 -> 제안 -> WALP -> 도구 -> (결과는 텔레메트리로) -> State Manager.
+"""한 바퀴 -- 질의 -> 맥락 정책 -> 프롬프트 정책 -> provider -> 응답 -> 제안 -> Arbiter -> 도구 -> (결과는 텔레메트리로) -> State Manager.
 
 판(round)마다:
 
@@ -6,7 +6,7 @@
          (직전에 retrieve 로 청한 행 · 직전에 막힌 까닭을 함께)과 CanonicalPrompt(도구는 좁히기만)를 낸다
     4. PROVIDER ADAPTER 가 provider 의 요청으로 바꿔 부르고, 응답을 CanonicalResponse 로 정규화한다
     5. 응답은 **제안(Proposal)** 이 된다 -- 함수 호출 응답이어도 실행이 아니다
-    6. WALP ARBITER 가 판정한다
+    6. Arbiter 가 판정한다
          ALLOW retrieve -> 그 handle 의 행을 다음 판에 KEEP 으로 싣고 계속
          ALLOW 도구     -> 실행. 돌려준 것을 텔레메트리로 ingest 하고 끝
          DENY           -> 까닭을 다음 판 맥락의 `denied` 에 싣고 계속(`retry_on_deny`)
@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from .arbiter import DENY, NOOP, WalpArbiter
+from .arbiter import DENY, NOOP, Arbiter
 from .canonical import CanonicalRequest
 from .context import ContextPolicy
 from .cr import ContextRuntime
@@ -49,11 +49,11 @@ class RunResult:
 
 
 class Pipeline:
-    """CR(Context Runtime)이 지은 결정(CD)을 provider 에 넘기고, 제안을 WALP 로 판정하고, ALLOW 면 도구를 부른다.
+    """CR(Context Runtime)이 지은 결정(CD)을 provider 에 넘기고, 제안을 Arbiter 로 판정하고, ALLOW 면 도구를 부른다.
     맥락 · 프롬프트를 여기서 짓지 않는다 -- `self.cr.decide()` 만 부른다."""
 
     def __init__(self, manager, registry, llm, policy: "ContextPolicy | None" = None,
-                 arbiter: "WalpArbiter | None" = None, retrieve_max: int = 20, prompt_plan: "dict | None" = None,
+                 arbiter: "Arbiter | None" = None, retrieve_max: int = 20, prompt_plan: "dict | None" = None,
                  model: "str | None" = None, stream: bool = False, tool_mode: str = "text",
                  prompt_layout: "str | None" = None, preamble: str = "", cr: "ContextRuntime | None" = None):
         self.m, self.reg = manager, registry
@@ -61,7 +61,7 @@ class Pipeline:
         self.llm = llm
         self.cr = cr or ContextRuntime(registry, policy, prompt_plan, prompt_layout, retrieve_max)
         self.policy, self.prompt_plan, self.retrieve_max = self.cr.policy, self.cr.prompt_plan, self.cr.retrieve_max
-        self.arbiter = arbiter or WalpArbiter(registry, clock=manager.clock)
+        self.arbiter = arbiter or Arbiter(registry, clock=manager.clock)
         self.preamble = preamble
         self.model, self.stream, self.tool_mode = model, stream, tool_mode
 

@@ -3,12 +3,12 @@
     USER -> handle(request)
       1. 세션의 **상태**를 읽는다(usage_model.snapshot -- 파생 상태만)
       2. Context Policy · Prompt Policy · Provider Policy 가 상태에서 계획을 고른다(판본 붙음)
-      3. Pipeline: State Query -> Context Policy -> Prompt Policy -> Provider Adapter -> Proposal -> WALP -> Tool
+      3. Pipeline: State Query -> Context Policy -> Prompt Policy -> Provider Adapter -> Proposal -> Arbiter -> Tool
       4. 실행을 **정규 텔레메트리**(RunRecord)로 적는다
       5. 그 텔레메트리를 State Manager 에 넣는다 -> 모형이 다음 상태를 정한다   (적응 루프가 닫힌다)
 
 MS 는 provider 가 아니다. 추론은 provider 가 하고, MS 는 그 위에서 무엇을 보일지 · 어떻게 말할지 · 누구에게 물을지 · 제안을 받을지를
-정한다. 연구 대상은 이 고리다: Telemetry -> State -> Context/Prompt Policy -> Provider -> LLM -> WALP.
+정한다. 연구 대상은 이 고리다: Telemetry -> State -> Context/Prompt Policy -> Provider -> LLM -> Arbiter.
 
 세계의 상태(서버 · 랙)와 사용의 상태(세션)는 같은 State Manager 에 둘 수도, 따로 둘 수도 있다(`usage_manager`). 평가는 과업마다
 세계를 새로 짓고 세션 상태는 이어 가야 해서 따로 둔다. 어느 쪽이든 같은 Model · Relationship 구조다.
@@ -23,7 +23,7 @@ import time
 
 from . import predicate
 from . import usage_model as U
-from .arbiter import DENY, WalpArbiter
+from .arbiter import DENY, Arbiter
 from .cr import VERSION as CR_VERSION, ContextRuntime
 from .pipeline import Pipeline
 from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt
@@ -60,7 +60,7 @@ class Runtime:
         self.prompt_layout = prompt_layout or DEFAULT_LAYOUT
         self.template_version = TEMPLATE_VERSIONS[self.prompt_layout]
         U.install(self.um)
-        self.arbiter = WalpArbiter(registry, grants, clock=manager.clock)
+        self.arbiter = Arbiter(registry, grants, clock=manager.clock)
         self.ctx_sel = context_selector or FixedContext()
         self.prompt_sel = prompt_selector or FixedPrompt()
         default = next(iter(self.providers)) if self.providers else None
@@ -161,13 +161,13 @@ class Runtime:
                  "simulated": bool(getattr(provider, "simulated", False))},
             tokens=tokens, latency=latency,
             interaction={"llm_calls": len(calls), "tool_calls": len(res.executed), "retries": retries,
-                         "context_retrievals": retrievals, "walp_denies": denies, "proposal_invalid": invalid,
+                         "context_retrievals": retrievals, "arbiter_denies": denies, "proposal_invalid": invalid,
                          "non_progress_rounds": denies + retrievals},
             outcome={"task_success": check_success(self.m, request, res.executed), "user_correction": None,
                      "tool_success": tool_ok},
             policy={"cr": CR_VERSION, "state": state, "context_policy": cplan, "prompt_policy": pplan,
                     "provider_policy": choice,
-                    "walp_decision": {"final": final, "all": [[d["verdict"], d["rule"]] for d in decisions]},
+                    "arbiter_decision": {"final": final, "all": [[d["verdict"], d["rule"]] for d in decisions]},
                     "inputs": {"base_context": self.base_context, "default_provider": self.provider_policy.default
                                if isinstance(self.provider_policy, ExplicitProvider) else None}},
             cost=cost,

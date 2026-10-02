@@ -4,7 +4,7 @@
     2. State 의 뜻은 Model 이 정한다            -> model.py
     3. LLM 에는 State 전체가 아니라 Query 결과만 -> query.py · context.py · llm.py
 """
-from .arbiter import ALLOW, DENY, NOOP, Decision, WalpArbiter
+from .arbiter import ALLOW, DENY, NOOP, Decision, Arbiter
 from .context import KEEP, RETRIEVE, SUMMARIZE, ContextPolicy, MinimalContext
 from .graph import StateGraph
 from .llm import CommandLLM, Proposal, ScriptedLLM, build_prompt, parse_proposal

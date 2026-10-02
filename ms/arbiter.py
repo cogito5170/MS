@@ -1,4 +1,4 @@
-"""WALP ARBITER -- LLM 의 제안을 결정론적으로 ALLOW / DENY 한다. LLM 이 자기 제안을 판정하지 않는다.
+"""Arbiter -- LLM 의 제안을 결정론적으로 ALLOW / DENY 한다. LLM 이 자기 제안을 판정하지 않는다.
 
 중재자는 두 가지를 같이 본다: LLM 이 **본 것**(최소 맥락)과 **지금의 상태**(그래프).
 규칙(위에서부터 처음 걸리는 것이 DENY 의 까닭):
@@ -17,8 +17,8 @@
 
 `tool="none"` 은 할 것이 없다는 제안이라 판정 없이 NOOP 이다.
 
-walp 실행 정책층(`walp/docs/실행정책층/설계.md` §5)의 안전 불변식 중 1 · 2 · 3 을 이 자리에 옮긴 것이다:
-바깥 · 되돌릴 수 없는 동작은 허가된 것만 · 결과는 결정론적 확인을 지나야 · 확신이 없으면 올린다(여기서는 DENY 하고 까닭을 LLM 에 돌려준다).
+지키는 것: 바깥 · 되돌릴 수 없는 동작은 허가된 것만 · 결과는 결정론적 확인을 지나야 · 확신이 없으면 DENY 하고 까닭을 LLM 에 돌려준다.
+(계획 ⑦: 허가 A7 은 Guard 로 옮긴다 -- 이 층은 선택한 제안이 맥락 · 상태에 맞는지를, Guard 는 실행해도 되는지를 본다.)
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ class Decision:
         return asdict(self)
 
 
-class WalpArbiter:
+class Arbiter:
     def __init__(self, registry, grants=(), ledger_path: "str | None" = None, clock=time.time):
         self.registry = registry
         self.grants = set(grants)          # external · irreversible 을 허락한 도구 이름

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 NONE = "none"
 
-INSTRUCTIONS = """너는 제안만 한다. 실행은 중재자(WALP ARBITER)가 판정한 뒤에 한다.
+INSTRUCTIONS = """너는 제안만 한다. 실행은 중재자(Arbiter)가 판정한 뒤에 한다.
 아래 STATE 는 상태 전체가 아니라 질의 결과다. 거기 없는 개체는 모른다고 보라.
 - 도구는 tools 에 있는 것만, 대상은 그 도구의 targets 에 있는 것만 고른다.
 - summaries 로만 보이는 개체에 손대려면 먼저 retrieve 로 그 handle 을 청한다.

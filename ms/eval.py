@@ -93,7 +93,7 @@ class Lane:
                 row = _row(self.letter, self.rep, task, rec, out["result"])
                 log(f"  {self.letter} r{self.rep} {task['id']:<18} {'성공' if ok else '실패'} "
                     f"in={rec['tokens']['input_tokens']} 캐시={rec['tokens']['cached_input_tokens']} "
-                    f"ms={rec['latency']['total_ms']:.0f} walp={rec['policy']['walp_decision']['all']}")
+                    f"ms={rec['latency']['total_ms']:.0f} arbiter={rec['policy']['arbiter_decision']['all']}")
                 if ok or not task.get("correction"):
                     rt.feedback(rec["run"]["run_id"], False)
                     break
@@ -132,7 +132,7 @@ def run_all(configs, slots, tasks_file, reps, provider_kw=None, order="interleav
 
 
 def _row(letter, rep, task, rec, result) -> dict:
-    decisions = rec["policy"]["walp_decision"]["all"]
+    decisions = rec["policy"]["arbiter_decision"]["all"]
     st = rec["policy"]["state"]
     rats = [len(r["proposal"].get("rationale") or "") for r in result["rounds"] if "proposal" in r]
     prefixes = sorted({c["cd"]["prefix_hash"] for c in result["calls"] if c.get("cd")})
@@ -148,7 +148,7 @@ def _row(letter, rep, task, rec, result) -> dict:
             "inference_ms": rec["latency"]["inference_ms"], "ttft_ms": rec["latency"]["ttft_ms"],
             "retries": rec["interaction"]["retries"], "tool_calls": rec["interaction"]["tool_calls"],
             "retrievals": rec["interaction"]["context_retrievals"], "llm_calls": rec["interaction"]["llm_calls"],
-            "denies": rec["interaction"]["walp_denies"], "cost_usd": rec["cost"]["usd"],
+            "denies": rec["interaction"]["arbiter_denies"], "cost_usd": rec["cost"]["usd"],
             "recovered": bool(rec["outcome"]["task_success"]) if any(v == "DENY" for v, _ in decisions) else None,
             "state_known": any(v is not None for k, v in st.items() if k != "model_version"),
             "context_plan": rec["policy"]["context_policy"]["reasons"], "prompt_plan": rec["policy"]["prompt_policy"]["reasons"],
@@ -178,8 +178,8 @@ def summarize(rows: list) -> dict:
             "total_ms_median": statistics.median([r["total_ms"] for r in rows]) if rows else None,
             "cost_usd": None if any(r["cost_usd"] is None for r in rows) else sum(r["cost_usd"] for r in rows),
             "tool_calls": sum(r["tool_calls"] for r in rows), "retrievals": sum(r["retrievals"] for r in rows),
-            "walp_deny_rate": (sum(r["denies"] for r in rows) / calls) if calls else None,
-            "walp_recovery_rate": _mean([float(r["recovered"]) for r in with_deny]),
+            "arbiter_deny_rate": (sum(r["denies"] for r in rows) / calls) if calls else None,
+            "arbiter_recovery_rate": _mean([float(r["recovered"]) for r in with_deny]),
             "runs_with_deny": len(with_deny),
             "distinct_prefixes": len({h for r in rows for h in r.get("prefix_hashes") or []})}
 
@@ -274,7 +274,7 @@ def report_md(rep: dict) -> str:
                  f"{f(s['retries'], 2)} | {f(s['input_tokens'], 0)} | {f(s.get('uncached_input_tokens'), 0)} | "
                  f"{f(s['output_tokens'], 0)} | {f(s['total_tokens'], 0)} | "
                  f"{f(s['total_ms_median'], 0)} | {f(s['cost_usd'], 4)} | {s['tool_calls']} | {s['retrievals']} | "
-                 f"{f(s['walp_deny_rate'], 2)} | {f(s['walp_recovery_rate'], 2)} |")
+                 f"{f(s['arbiter_deny_rate'], 2)} | {f(s['arbiter_recovery_rate'], 2)} |")
     L += ["", "## 짝 비교(사전등록 판정)", ""]
     for c in rep["comparisons"]:
         q = c["quality"]

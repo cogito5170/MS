@@ -10,7 +10,7 @@ Context Policy 는 **무엇을** 보일지(어느 행 · 요약 · 손잡이)를
     output_format      json_text(글 속 JSON) · json_schema(provider 가 할 수 있으면 native 강제, 아니면 프롬프트로)
     tool_permission    offered · no_irreversible · read_local -- 맥락이 제안한 도구를 **좁히기만** 한다
 
-Prompt Policy 는 WALP 를 모른다(import 하지 않는다). 지시문에 무엇을 써도 중재자의 허가 · 규칙은 바뀌지 않는다.
+Prompt Policy 는 Arbiter 를 모른다(import 하지 않는다). 지시문에 무엇을 써도 중재자의 허가 · 규칙은 바뀌지 않는다.
 """
 from __future__ import annotations
 
@@ -28,7 +28,9 @@ JSON 하나: {"tool","target","args","rationale":"한 줄"}"""
 #   prompt-text-3  배치 stable_prefix -- 시스템 글을 모든 계획이 같이 쓰는 한 덩어리로 고정하고, 계획이 바꾸는 것은
 #                  전부 사용자 글의 STATE **뒤**(tail)로 옮겼다. provider 캐시는 앞부분 일치라서(도구 -> 시스템 -> 메시지)
 #                  계획이 시스템 글을 바꾸면 캐시가 깨진다(재측정 2). concise 는 이 배치에서 적용하지 않는다(notes)
-TEMPLATE_VERSIONS = {"legacy": "prompt-text-2", "stable_prefix": "prompt-text-3"}
+#   prompt-text-4  stable_prefix 그대로, 지시문에서 "WALP" 를 뺐다(2026-10-02: WALP 는 쓰지 않는다 -> "중재자(Arbiter)")
+#   prompt-text-2.1 legacy 그대로, 같은 이름 고침
+TEMPLATE_VERSIONS = {"legacy": "prompt-text-2.1", "stable_prefix": "prompt-text-4"}
 DEFAULT_LAYOUT = "stable_prefix"
 TEMPLATE_VERSION = TEMPLATE_VERSIONS[DEFAULT_LAYOUT]
 
@@ -97,4 +99,4 @@ class PromptPolicy:
             notes.append(f"instruction_mode={plan['instruction_mode']}(stable_prefix 에서는 시스템 글을 안 바꾼다)")
         tail = [x for x in (POLICY_LINE[plan["tool_permission"]],) if x]
         return CanonicalPrompt(instruction=STABLE_SYSTEM, context=context, examples=examples, output_schema=schema,
-                               tools=payload["tools"], preamble=preamble, tail=tail, notes=notes)
+                               tools=payload["tools"], preamble=preamble, tail=tail, notes=notes, cache_boundary="system")

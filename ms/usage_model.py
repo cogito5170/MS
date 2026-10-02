@@ -25,7 +25,8 @@ Session 의 속성은 전부 **evidence** 다 -- 그래프(→ 질의 → LLM)�
 """
 from __future__ import annotations
 
-MODEL_VERSION = "usage-model-2"
+MODEL_VERSION = "usage-model-3"
+# usage-model-2 -> 3 (2026-10-02): 뜻은 그대로, 신호 이름만 interaction.walp_denies -> interaction.arbiter_denies
 # usage-model-1 -> 2 (2026-10-01): 품질 상태(answer_reliability LOW · correction_rate HIGH)는 **사건 하나로 정하지 않는다.**
 #   재측정에서 세션 셋째 실행의 못 읽은 답 하나(1/3 = 0.33 >= 0.2)로 LOW 가 되어 품질 우선으로 뒤집혔다.
 #   창 5 · 문턱 0.2 면 창 안의 실패 **한 번**이 곧 LOW 다 -- 표본 수만 늘려서는 안 고쳐진다(1/3 도 0.33).
@@ -57,7 +58,7 @@ SESSION = {
         # 최근 창
         "total_ms": _ev("number", 5, "mean"), "llm_calls": _ev("number", 5, "mean"), "retries": _ev("number", 5, "mean"),
         "non_progress_rounds": _ev("number", 5, "mean"),
-        "proposal_invalid": _ev("number", 5, "mean"), "walp_denies": _ev("number", 5, "mean"),
+        "proposal_invalid": _ev("number", 5, "mean"), "arbiter_denies": _ev("number", 5, "mean"),
         "user_correction": _ev("bool", 10, "mean"),
         # 상태를 정하는 데 안 쓰지만 모형이 아는 것(그래야 격리함이 아니라 evidence 로 간다)
         "output_tokens": _ev("integer"), "cached_input_tokens": _ev("integer"), "retrieved_tokens": _ev("integer"),
@@ -76,7 +77,7 @@ SESSION = {
         {"signal": "interaction.retries", "property": "retries"},
         {"signal": "interaction.non_progress_rounds", "property": "non_progress_rounds"},
         {"signal": "interaction.proposal_invalid", "property": "proposal_invalid"},
-        {"signal": "interaction.walp_denies", "property": "walp_denies"},
+        {"signal": "interaction.arbiter_denies", "property": "arbiter_denies"},
         {"signal": "outcome.user_correction", "property": "user_correction"},
         {"signal": "tokens.output_tokens", "property": "output_tokens"},
         {"signal": "tokens.cached_input_tokens", "property": "cached_input_tokens"},
@@ -104,14 +105,14 @@ SESSION = {
             {"when": [["matched_rows", ">=", 0], ["llm_calls", ">=", 0]], "value": "LOW"}], "default": None},
         "answer_reliability": {"cases": [
             {"when": [["proposal_invalid", ">=", 0.2], ["proposal_invalid__sum", ">=", MIN_EVENTS],
-                      ["proposal_invalid__n", ">=", MIN_SAMPLES], ["walp_denies", ">=", 0], ["llm_calls", ">", 0]],
+                      ["proposal_invalid__n", ">=", MIN_SAMPLES], ["arbiter_denies", ">=", 0], ["llm_calls", ">", 0]],
              "value": "LOW"},
-            {"when": [["walp_denies", ">=", {"prop": "llm_calls", "mul": 0.5}], ["walp_denies__sum", ">=", MIN_EVENTS],
+            {"when": [["arbiter_denies", ">=", {"prop": "llm_calls", "mul": 0.5}], ["arbiter_denies__sum", ">=", MIN_EVENTS],
                       ["proposal_invalid__n", ">=", MIN_SAMPLES], ["proposal_invalid", ">=", 0], ["llm_calls", ">", 0]],
              "value": "LOW"},
-            {"when": [["proposal_invalid", "<=", 0.05], ["walp_denies", "<=", {"prop": "llm_calls", "mul": 0.1}],
+            {"when": [["proposal_invalid", "<=", 0.05], ["arbiter_denies", "<=", {"prop": "llm_calls", "mul": 0.1}],
                       ["proposal_invalid__n", ">=", MIN_SAMPLES], ["llm_calls", ">", 0]], "value": "HIGH"},
-            {"when": [["proposal_invalid", ">=", 0], ["walp_denies", ">=", 0],
+            {"when": [["proposal_invalid", ">=", 0], ["arbiter_denies", ">=", 0],
                       ["proposal_invalid__n", ">=", MIN_SAMPLES], ["llm_calls", ">", 0]], "value": "MEDIUM"}],
             "default": None},
         "correction_rate": {"cases": [

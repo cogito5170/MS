@@ -6,7 +6,7 @@
     python3 -m ms context SPEC --telemetry T.jsonl --task "..."   # LLM 에 갈 최소 맥락만(LLM 안 부름)
     python3 -m ms run     SPEC --telemetry T.jsonl --task "..." --llm "claude -p" [--grant reboot] [--ledger a.jsonl]
 
-    # Policy Runtime (MS API): 상태 -> 정책 -> provider -> 제안 -> WALP, 실행은 정규 텔레메트리로 상태에 되돌아간다
+    # Policy Runtime (MS API): 상태 -> 정책 -> provider -> 제안 -> Arbiter, 실행은 정규 텔레메트리로 상태에 되돌아간다
     python3 -m ms ask  SPEC --telemetry T.jsonl --task "..." --provider claude-cli [--model M]
                        [--context adaptive] [--prompt adaptive] [--stream] [--json]
     python3 -m ms eval --tasks eval/tasks/datacenter.json --openai openai:<모형> --claude claude:claude-opus-5-5
@@ -24,7 +24,7 @@ import shlex
 import sys
 import time
 
-from .arbiter import WalpArbiter
+from .arbiter import Arbiter
 from .context import ContextPolicy
 from .llm import CommandLLM, ScriptedLLM
 from .manager import StateManager
@@ -167,7 +167,7 @@ def main(argv=None):
 
     llm = CommandLLM(shlex.split(a.llm)) if a.llm else ScriptedLLM(DEMO_SCRIPT if a.cmd == "demo" else [])
     grants = set(spec.get("grants") or []) | set(a.grant)
-    arb = WalpArbiter(reg, grants, a.ledger, clock=m.clock)
+    arb = Arbiter(reg, grants, a.ledger, clock=m.clock)
     pipe = Pipeline(m, reg, llm, policy, arb)
     if not a.json:
         _print_ingest(m)

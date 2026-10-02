@@ -7,7 +7,7 @@ import unittest
 
 from ms import (ALLOW, APPLIED, DENY, KEEP, NOOP, REJECTED, RETRIEVE, STALE, SUMMARIZE, UNBOUND, ContextPolicy,
                 Model, ModelError, Pipeline, ScriptedLLM, StateManager, StateQuery, Telemetry, ToolRegistry,
-                WalpArbiter, build_prompt, parse_proposal, run_query, tool_query)
+                Arbiter, build_prompt, parse_proposal, run_query, tool_query)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPEC = os.path.join(ROOT, "ms", "examples", "datacenter.json")
@@ -32,7 +32,7 @@ def world(budget=1500, clock=None, grants=()):
             m.ingest(json.loads(line))
     reg = ToolRegistry(spec["tools"])
     pol = ContextPolicy(budget_chars=budget, summarize_min=3)
-    arb = WalpArbiter(reg, grants, clock=clock)
+    arb = Arbiter(reg, grants, clock=clock)
     return spec, m, reg, pol, arb, clock
 
 
@@ -91,7 +91,7 @@ class TelemetryIsNotState(unittest.TestCase):
         # reboot 이 "reboot_ack" 를 돌려줘도 모형이 모르는 신호라 상태가 아니다
         spec, m, reg, pol, _, clock = world(grants=("reboot",))
         llm = ScriptedLLM([{"tool": "reboot", "target": "srv07"}])
-        res = Pipeline(m, reg, llm, pol, WalpArbiter(reg, {"reboot"}, clock=clock)).run("t", spec["queries"])
+        res = Pipeline(m, reg, llm, pol, Arbiter(reg, {"reboot"}, clock=clock)).run("t", spec["queries"])
         self.assertEqual(res.outcome, "executed")
         self.assertEqual(res.ingested[0]["status"], UNBOUND)
         self.assertNotIn("reboot_ack", m.graph.nodes["srv07"].props)
@@ -262,8 +262,8 @@ class Policy(unittest.TestCase):
         self.assertIn('"srv09"', llm.prompts[1].split('"summaries"')[0])   # 둘째 판에는 state 칸에
 
 
-# -- WALP ARBITER ----------------------------------------------------------------
-class Arbiter(unittest.TestCase):
+# -- Arbiter ----------------------------------------------------------------
+class ArbiterRules(unittest.TestCase):
     def setUp(self):
         self.spec, self.m, self.reg, self.pol, self.arb, self.clock = world(budget=1500)
         self.ctx = ctx_of(self.spec, self.m, self.reg, self.pol)
@@ -315,7 +315,7 @@ class Arbiter(unittest.TestCase):
     def test_A7_irreversible_needs_grant(self):
         self.assertEqual(self.d(tool="reboot", target="srv07").rule, "A7")
         self.assertEqual(self.d(tool="open_ticket", target="srv05", args={"note": "팬"}).rule, "A7")
-        arb = WalpArbiter(self.reg, {"reboot"}, clock=self.clock)
+        arb = Arbiter(self.reg, {"reboot"}, clock=self.clock)
         self.assertEqual(arb.decide(P(tool="reboot", target="srv07"), self.ctx, self.m).verdict, ALLOW)
 
     def test_A8_duplicate(self):
@@ -332,7 +332,7 @@ class Arbiter(unittest.TestCase):
     def test_ledger_jsonl(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "l.jsonl")
-            arb = WalpArbiter(self.reg, ledger_path=path, clock=self.clock)
+            arb = Arbiter(self.reg, ledger_path=path, clock=self.clock)
             arb.decide(P(tool="reboot", target="srv07"), self.ctx, self.m)
             with open(path, encoding="utf-8") as f:
                 rec = json.loads(f.readline())

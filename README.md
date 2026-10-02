@@ -2,12 +2,12 @@
 
 **MS 는 LLM provider 가 아니다.** OpenAI · Claude · Gemini 는 추론 provider 이고, MS 는 그 **위에서** 도는 정책 런타임(control plane)이다.
 MS 가 정하는 것은 넷이다: LLM 에게 **무엇을 보일지**(Context Policy), **어떻게 말할지**(Prompt Policy), **누구에게 물을지**(Provider Policy),
-LLM 의 제안을 **받을지**(WALP). 표준 라이브러리만 쓴다 — provider SDK 도 안 쓴다.
+LLM 의 제안을 **받을지**(Arbiter · 앞으로 Validate · Arbitrate · Guard). 표준 라이브러리만 쓴다 — provider SDK 도 안 쓴다.
 
 **연구 대상은 이 적응 고리다:**
 
 ```
-Telemetry → State → Context/Prompt Policy → Provider → LLM → WALP
+Telemetry → State → CR(맥락) → Provider → LLM → Arbiter
     ▲                                                          │
     └────────────── 실행 결과도 Telemetry 로 돌아온다 ◄──────────┘
 ```
@@ -16,6 +16,9 @@ Telemetry → State → Context/Prompt Policy → Provider → LLM → WALP
 > 고정 정책보다 **품질을 지키면서** 토큰 · 지연 · 재시도 · 비용을 줄이는가? — 안전과 최소 품질은 단단한 제약이다.
 > **아직 답이 없다** (아래 "잰 것").
 
+> **WALP 는 쓰지 않는다(2026-10-02).** 처음 설계 그림의 "WALP ARBITER" 는 지금의 `Arbiter` 다. 옛 사전등록 · 결과 파일의
+> `walp_*` 칸은 그때의 기록이라 그대로 둔다(지금 텔레메트리는 `arbiter_*`, ms-run-telemetry-2).
+>
 > **이름 고침(2026-10-02)**: 아래에서 Context Policy · Prompt Policy 라고 부르는 것은 정책이 아니라 **Context Runtime(CR)** 이다 —
 > 매 요청 무엇을 보이고 어떻게 말할지 정하는 런타임이고, 그 결정을 Context Decision(CD)이라 부른다. 코드는 `ms/cr.py` 한 곳으로 모였다.
 > 지금은 에이전트가 MS 안에서 맡고 나중에 독립 계층으로 옮긴다. 역할 기록 [`docs/역할.md`](docs/역할.md) · 앞으로의 계획 [`docs/계획.md`](docs/계획.md).
@@ -57,7 +60,7 @@ LLM
  ↓
 Proposal               llm.proposal_from                 글 속 JSON 이든 함수 호출이든 **제안**일 뿐이다
  ↓
-WALP                   arbiter.WalpArbiter               ALLOW · DENY (A0~A8, 예외면 DENY)
+Arbiter                arbiter.Arbiter                   ALLOW · DENY (A0~A8, 예외면 DENY)
  ↓
 Tool                   tools.ToolSpec.run                ALLOW 가지 안에서만 불린다(호출 자리가 하나)
  ↓
@@ -74,10 +77,10 @@ State Manager          manager.StateManager              Model 이 해석 → �
 | Model (`model.py` · `usage_model.py`) | 신호 → 속성(변환 · 단위 · 범위 · ttl), 속성 → 파생 상태, `evidence` 창(window · agg) | 입력이 없는데 기본값으로 메우기 — 모르면 **모름** |
 | State Query | 고른 속성 · 결과 안 개체끼리의 관계만 | 그래프 전체를 내기 |
 | Context Policy | 질의 결과 → 최소 맥락. 예산은 **실제로 그려진 글자 수**에 | must 행을 빼거나 미루기 · 행을 조용히 버리기 |
-| Prompt Policy | 맥락을 어떻게 말할지 | 도구를 **넓히기**(좁히기만 된다) · WALP 를 바꾸기(import 조차 안 한다) |
+| Prompt Policy | 맥락을 어떻게 말할지 | 도구를 **넓히기**(좁히기만 된다) · 중재자를 바꾸기(import 조차 안 한다) |
 | Provider Policy | provider · 모형 고르기 | 승자를 가정하기 — 지금은 명시 선택뿐 |
 | Provider Adapter | canonical ↔ provider 번역, 사용량 정규화, provider 고유 값은 `extensions` 로 | 위 계층에 provider 모양을 흘리기 · 못 하는 옵션을 흉내 내기(`unsupported` 로 적는다) |
-| WALP | LLM 이 본 것 + 지금 상태로 ALLOW / DENY | 프롬프트 · LLM 의 말로 허가가 바뀌기 |
+| Arbiter | LLM 이 본 것 + 지금 상태로 ALLOW / DENY | 프롬프트 · LLM 의 말로 허가가 바뀌기 |
 | Tool | 세계에 작용하고 **관측**을 돌려준다 | 상태를 직접 쓰기 — 결과는 텔레메트리로 다시 들어간다 |
 
 ## 원칙 열 개와 그것을 붙드는 시험
@@ -88,7 +91,7 @@ State Manager          manager.StateManager              Model 이 해석 → �
 | 4 | LLM 은 State Graph 전체에 접근하지 않는다 | `LLMSeesOnlyQueries.test_request_holds_no_graph_objects` — 요청 안에 그래프 · 노드 객체가 없고 기본 타입뿐 |
 | 5 | Query · Context Policy 가 허락한 최소 맥락만 | `test_only_query_authorized_entities` (양성 대조 포함, 세션 이름 · 예산 · 상태 이름도 안 보임) · `test_dropped_rows_not_sent` |
 | 6 | LLM 의 출력은 Proposal | `ProposalBoundary.test_native_tool_call_is_only_a_proposal` — 함수 호출 응답도 도구를 안 부른다 |
-| 7 | 실행 여부는 WALP 가 | `test_deny_means_no_tool_whatever_the_llm_says` · `test_single_call_site` · `PromptCannotOverrideWalp` |
+| 7 | 실행 여부는 Arbiter 가 | `test_deny_means_no_tool_whatever_the_llm_says` · `test_single_call_site` · `PromptCannotOverrideArbiter` |
 | 8 | 모든 provider 를 같은 텔레메트리 꼴로 | `Normalization.test_same_work_same_canonical_usage` — 같은 일을 세 provider 가 제 말투로 보고해도 canonical 이 같다 |
 | 9 | 원 텔레메트리 ≠ 의미 있는 State | `test_raw_counts_are_not_state` — 토큰 수는 그래프 · 질의에 없고 파생 상태만 있다 |
 | 10 | provider 모양이 State · Policy 모형에 안 스민다 | `test_provider_field_names_stay_in_adapters` · `ProviderCannotChangeSemantics` |
@@ -123,9 +126,9 @@ provider 고유 값(Claude 의 `cache_creation_input_tokens`, OpenAI 의 `reason
 run          run_id · session_id · provider · model · timestamp · simulated
 tokens       input_tokens · output_tokens · cached_input_tokens · context_tokens* · retrieved_tokens* · total_tokens
 latency      ttft_ms (스트리밍일 때만) · inference_ms · total_ms
-interaction  llm_calls · tool_calls · retries · context_retrievals · walp_denies · proposal_invalid · non_progress_rounds
+interaction  llm_calls · tool_calls · retries · context_retrievals · arbiter_denies · proposal_invalid · non_progress_rounds
 outcome      task_success (그래프로 판정, 기준이 없으면 None) · user_correction (피드백으로) · tool_success
-policy       state · context_policy · prompt_policy · provider_policy · walp_decision · inputs   ← 재현용
+policy       state · context_policy · prompt_policy · provider_policy · arbiter_decision · inputs   ← 재현용
 cost         usd · source (provider | price_table | None)
 estimated    * 추정한 칸과 방법        unsupported  못 해서 안 보낸 옵션        extensions  provider 고유 값
 ```
@@ -161,7 +164,7 @@ estimated    * 추정한 칸과 방법        unsupported  못 해서 안 보낸
 - **Provider** (`provider-explicit-1`): 요청이 이름 댄 것. `ProviderPolicy.select(state, request)` 인터페이스만 있고, 상태로 고르는 정책은
   같은 과업을 provider 둘에 돌린 평가가 쌓인 뒤의 일이다.
 
-## WALP
+## Arbiter
 
 LLM 이 **본 것**(최소 맥락)과 **지금 상태**(그래프)를 같이 본다: A0 못 읽음 · A1 제안 안 된 도구 · A2 본 적 없는 대상(요약 · 미룸이면
 "retrieve 먼저", DROP 이면 "정책이 뺐다") · A3 그 도구의 대상 아님 · A4 인자 · A5 맥락 뒤 상태 바뀜 · A6 사전조건 낡음/거짓 ·
@@ -175,10 +178,10 @@ A7 external · irreversible 허가 없음 · A8 같은 판 되풀이 · E 예외
 | C · D | OpenAI · Claude | adaptive | fixed |
 | E · F | OpenAI · Claude | adaptive | adaptive |
 
-같은 과업(`eval/tasks/datacenter.json`, 7 개) · 같은 성공 기준(최종 **상태 그래프**에 대한 술어 + 금지 도구 미실행) · 같은 WALP 허가.
+같은 과업(`eval/tasks/datacenter.json`, 7 개) · 같은 성공 기준(최종 **상태 그래프**에 대한 술어 + 금지 도구 미실행) · 같은 Arbiter 허가.
 과업마다 세계를 새로 짓고, 세션 상태는 이어 간다. 실패하면 모의 사용자가 한 번 고친다(user_correction). 짝(A↔C · B↔D · C↔E · D↔F)마다
 과업 단위 부트스트랩 95% 구간 · 품질 비열등(δ=0.05) · 안전을 먼저 본다. **provider 사이는 비교하지 않는다.**
-잰 것: 성공 · 고침 · 재시도 · 입력/출력/총 토큰 · 지연 · 비용 · 도구 호출 · 꺼냄 · WALP DENY 율 · 회복률.
+잰 것: 성공 · 고침 · 재시도 · 입력/출력/총 토큰 · 지연 · 비용 · 도구 호출 · 꺼냄 · Arbiter DENY 율 · 회복률.
 
 ```bash
 python3 -m ms eval --tasks eval/tasks/datacenter.json \
@@ -206,7 +209,7 @@ python3 -m ms ask ms/examples/datacenter.json --telemetry ms/examples/datacenter
 python3 -m ms ask ... --provider claude --model claude-opus-5-5 --stream     # ANTHROPIC_API_KEY
 python3 -m ms ask ... --provider openai --model <모형>                        # OPENAI_API_KEY (모형 기본값을 지어내지 않는다)
 python3 -m ms ask ... --provider sim-gemini                                   # 모의 -- 배선 확인
-python3 -m unittest tests.test_ms tests.test_runtime                          # 101 개
+python3 -m unittest tests.test_ms tests.test_runtime                          # 102 개
 ```
 
 ```python

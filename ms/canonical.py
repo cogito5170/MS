@@ -1,6 +1,6 @@
 """Canonical 꼴 -- provider 에 매이지 않는 요청 · 응답 · 사용량.
 
-MS 의 정책 층(Context · Prompt · Provider Policy · WALP · State)은 이 꼴만 안다. OpenAI · Claude · Gemini 의 요청 · 응답 모양은
+MS 의 정책 층(Context · Prompt · Provider Policy · Arbiter · State)은 이 꼴만 안다. OpenAI · Claude · Gemini 의 요청 · 응답 모양은
 `ms/providers/` 안에서만 산다(원칙 10). 그래서 여기 있는 것은 전부 **기본 타입**(str · int · float · bool · None · list · dict)이다 --
 provider SDK 객체가 들어올 자리가 없다.
 
@@ -41,11 +41,14 @@ class CanonicalPrompt:
     context: list = field(default_factory=list)       # [{"type": "state", "data": {...}}] -- 최소 맥락만
     examples: list = field(default_factory=list)      # [{"input": "...", "output": "..."}]
     output_schema: "dict | None" = None               # None 이면 글 속 JSON
-    tool_policy: str = ""                             # 사람이 읽는 한 줄(무엇을 제안해도 되나). WALP 를 바꾸지 않는다
+    tool_policy: str = ""                             # 사람이 읽는 한 줄(무엇을 제안해도 되나). Arbiter 를 바꾸지 않는다
     tools: list = field(default_factory=list)         # 도구 카드 -- 맥락이 제안한 것의 부분집합
     preamble: str = ""                                # 사용자 글 맨 앞(실행마다 다른 표지 -- 평가의 --fresh)
     tail: list = field(default_factory=list)          # STATE 뒤에 붙는 계획별 지침(캐시를 지키려고 뒤에 둔다)
     notes: list = field(default_factory=list)         # 계획이 요청했지만 이 배치에서 적용하지 않은 것
+    # CR 의 선언: 어디까지가 요청 사이에 바뀌지 않는 앞부분인가. "system" = 시스템 글 전체가 안정.
+    # None = 선언 없음(안정을 약속하지 않는다). provider 가 이것을 **어떻게** 캐시할지는 어댑터가 정한다 -- CR 은 provider 를 모른다.
+    cache_boundary: "str | None" = None
 
     def context_text(self) -> str:
         return "\n".join(json.dumps(c["data"], ensure_ascii=False, separators=(",", ":")) for c in self.context)

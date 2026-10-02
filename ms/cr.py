@@ -9,7 +9,7 @@ CR 이 내는 것을 **Context Decision(CD)** 이라 부른다.
     plan(state)          상태 -> 계획(맥락 손잡이 · 프롬프트 꼴). 판본 붙음, 순수 함수(replay 가 다시 계산한다)
     decide(...)          계획대로 질의를 돌리고 최소 맥락과 프롬프트를 짓는다. 판(round)마다 부른다
 
-**경계.** MS 안에서 맥락 · 프롬프트를 짓는 길은 여기 하나다. Pipeline · Runtime 은 CD 를 받아 provider 에 넘기고 WALP 로 판정할 뿐이다
+**경계.** MS 안에서 맥락 · 프롬프트를 짓는 길은 여기 하나다. Pipeline · Runtime 은 CD 를 받아 provider 에 넘기고 Arbiter 로 판정할 뿐이다
 (시험이 붙든다). 지금은 에이전트가 이 역할을 MS 코드 안에서 맡고, 나중에 CR 을 독립 계층으로 옮길 때 끊을 자리가 이 파일이다.
 
 결정 기록의 `prefix_hash` 는 provider 캐시의 앞부분(시스템 글)의 지문이다. 캐시는 뜻이 아니라 **바이트의 앞부분 일치**라서,
@@ -34,7 +34,7 @@ def prefix_hash(text: str) -> str:
 
 @dataclass
 class ContextDecision:
-    ctx: object                 # MinimalContext -- WALP 가 "LLM 이 본 것" 으로 쓴다
+    ctx: object                 # MinimalContext -- Arbiter 가 "LLM 이 본 것" 으로 쓴다
     prompt: object              # CanonicalPrompt -- provider 어댑터로 간다
     record: dict = field(default_factory=dict)
 
@@ -83,5 +83,6 @@ class ContextRuntime:
         prompt = self.prompt_policy.build(ctx, self.prompt_plan, preamble)
         record = {"cr": self.version, "context_version": self.policy.version, "layout": self.layout,
                   "template": self.prompt_policy.version, "prefix_hash": prefix_hash(prompt.system_text()),
+                  "cache_boundary": prompt.cache_boundary,
                   "stats": ctx.stats(), "notes": list(prompt.notes)}
         return ContextDecision(ctx, prompt, record)

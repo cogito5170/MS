@@ -3,9 +3,9 @@
     run          run_id · session_id · provider · model · timestamp
     tokens       input_tokens · output_tokens · cached_input_tokens · context_tokens · retrieved_tokens · total_tokens
     latency      ttft_ms · inference_ms · total_ms
-    interaction  llm_calls · tool_calls · retries · context_retrievals · walp_denies · proposal_invalid · non_progress_rounds
+    interaction  llm_calls · tool_calls · retries · context_retrievals · arbiter_denies · proposal_invalid · non_progress_rounds
     outcome      task_success · user_correction · tool_success
-    policy       context_policy · prompt_policy · provider_policy · walp_decision · state(정책이 본 상태)
+    policy       context_policy · prompt_policy · provider_policy · arbiter_decision · state(정책이 본 상태)
     cost         usd · source(provider 보고 | 가격표 | 없음)
     estimated    추정한 칸과 방법
     unsupported  요청했지만 provider 가 못 해서 안 보낸 옵션
@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 
-SCHEMA_VERSION = "ms-run-telemetry-1"
+SCHEMA_VERSION = "ms-run-telemetry-2"     # 1 -> 2 (2026-10-02): walp_* 칸을 arbiter_* 로(WALP 는 쓰지 않는다)
 
 # OpenTelemetry GenAI 이름과의 짝(내보낼 때). 짝이 없는 칸은 MS 고유다
 OTEL = {"run.provider": "gen_ai.provider.name", "run.model": "gen_ai.request.model",
