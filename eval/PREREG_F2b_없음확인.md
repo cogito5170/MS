@@ -280,11 +280,20 @@ R4(H 가 G 의 꺼냄을 얼마나 줄이나 -- 모른다, 시나리오. G 와 H
 | 무엇 | 상태 |
 |---|---|
 | `cr-3` · M9(DC `MSStateReader` · 표시 순서 · 기본 결정) | 있음(MS `3034578`) |
-| `ctx-adaptive-2c`(덮음 선언) | 짓는다 -- 이 고침 뒤 |
-| 과업 묶음 `datacenter-tasks-3`(서버 36 · 예산 4,000 · keep_max 40 · 짝 8 · 워밍업 3 · `stratum` · `pair`) | 짓는다 |
-| 층화 하니스(R1a~R6 · S1 · S6 · S7) · B 에 retrieve 가 없다는 시험 | 짓는다 |
+| `ctx-adaptive-2c`(덮음 선언) | 지었다(`ms/policy.py` · `ms/context.py`) |
+| 과업 묶음 `datacenter-tasks-3`(서버 36 · 예산 4,000 · keep_max 40 · 짝 8 · 워밍업 3 · `stratum` · `pair`) | 지었다(`eval/tasks/make_datacenter_tasks3.py` · `eval/worlds/make_datacenter36.py`, 생성 파일 커밋 · 다시 지어 같은지 시험) |
+| 층화 하니스(R1a~R6 · S1 · S6 · S7) · B 에 retrieve 가 없다는 시험 | 지었다(`ms/eval.py stratified` · `tests/test_runtime.py F2bBundle`) |
 
 돌리기 전에 MS · DC 커밋을 여기에 적는다. 실행은 사용자 결정이다.
+
+**고침 1 뒤에 정한 것(짓다가, 돌리기 전)**: 이 묶음의 과업에는 `correction`(모의 사용자 고침)을 두지 않는다 -- 고침 재시도가 없다.
+그래서 실행 수는 정확히 285 다. 대신 correction_rate 는 늘 LOW 다(품질 우선이 고침으로는 켜지지 않는다).
+
+**돌릴 명령**(DC 통합 브랜치를 `MS_DC_PATH` 에):
+
+    MS_DC_PATH=../DC python3 -m ms eval --tasks eval/tasks/datacenter_tasks3.json --claude claude-cli --configs B,G,H --reps 5 \
+        --order interleaved --seed 0 --fresh --state-reader dc --prereg eval/PREREG_F2b_없음확인.md \
+        --out eval/results/claude-cli_F2b_<날짜>
 
 ---
 

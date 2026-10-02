@@ -161,7 +161,21 @@ class AdaptiveContext2(AdaptiveContext):
     high_cuts = False
 
 
-CONTEXT_SELECTORS = {c.version: c for c in (FixedContext(), AdaptiveContext(), AdaptiveContext2())}
+class AdaptiveContext2c(AdaptiveContext2):
+    """ctx-adaptive-2c (F2b 고침 1, BD-86): ctx-adaptive-2 와 계획이 같고, 맥락을 줄였을 때 요약마다 덮음 선언
+    coverage{matched, shown, summarized, complete} 를 붙인다. 줄이지 않은 계획(고정과 같음)에는 붙이지 않는다 -- 그래야
+    규칙을 못 정해 기본 결정(KEEP)으로 갈 때 계획이 그대로다."""
+    version = "ctx-adaptive-2c"
+
+    def plan(self, state: dict, base: dict) -> dict:
+        out = super().plan(state, base)
+        if out["params"] != dict(BASE_CONTEXT, **base):
+            out["params"] = dict(out["params"], coverage=True)
+            out["reasons"] = out["reasons"] + ["덮음 선언"]
+        return out
+
+
+CONTEXT_SELECTORS = {c.version: c for c in (FixedContext(), AdaptiveContext(), AdaptiveContext2(), AdaptiveContext2c())}
 
 # BD-76 · BD-81: 맥락 계획의 안전 기본 결정. 값은 DC 목적 명세(context_runtime 의 default_decision)가 주고 MS 는 읽는다.
 DEFAULT_CONTEXT_ACTIONS = {"KEEP": FixedContext}      # KEEP = 행을 그대로 싣는다 = 고정 맥락

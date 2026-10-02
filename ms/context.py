@@ -143,15 +143,20 @@ class MinimalContext:
 
 class ContextPolicy:
     def __init__(self, budget_chars: int = 3000, summarize_min: int = 3, keep_max: int = 20, compress: bool = False,
-                 defer=(), drop: bool = False, defer_priority_min: "int | None" = None, version: str = "ctx-1"):
+                 defer=(), drop: bool = False, defer_priority_min: "int | None" = None, version: str = "ctx-1",
+                 coverage: bool = False):
         self.budget, self.summarize_min, self.keep_max = budget_chars, summarize_min, keep_max
         self.compress, self.defer, self.drop, self.version = compress, tuple(defer), drop, version
         self.defer_priority_min = defer_priority_min
+        self.coverage = coverage            # 요약마다 덮음 선언(F2b 칸 H, BD-86)
 
     def params(self) -> dict:
-        return {"budget_chars": self.budget, "summarize_min": self.summarize_min, "keep_max": self.keep_max,
-                "compress": self.compress, "defer": list(self.defer), "drop": self.drop,
-                "defer_priority_min": self.defer_priority_min}
+        out = {"budget_chars": self.budget, "summarize_min": self.summarize_min, "keep_max": self.keep_max,
+               "compress": self.compress, "defer": list(self.defer), "drop": self.drop,
+               "defer_priority_min": self.defer_priority_min}
+        if self.coverage:                   # 켰을 때만 싣는다 -- 옛 결정 기록의 params 와 재현이 그대로 맞게
+            out["coverage"] = True
+        return out
 
     def build(self, task: str, results, offers=(), retrieved=(), denied=()) -> MinimalContext:
         """예산은 **실제로 그려지는 글자 수**(`render()`)에 건다. 손으로 센 추정이 아니다."""
@@ -178,6 +183,7 @@ class ContextPolicy:
                     cand.append((r.name, row, row.must))
         matched = sum(r.matched for r in results)
         seen_tag = COMPRESS if self.compress else KEEP
+        by_name = {r.name: r for r in results}
 
         def assemble(keep: set, summarized: set) -> MinimalContext:
             ctx = MinimalContext(task, budget=self.budget, denied=list(denied), matched=matched,
@@ -207,6 +213,14 @@ class ContextPolicy:
                     ctx.summaries.append({"query": q, "handle": h, "summary": summarize(rows)})
                 for r in rows:
                     ctx.decisions[r.id] = SUMMARIZE if summed else RETRIEVE
+            if self.coverage:                                   # 덮음 선언: 이 질의의 행 전부가 보인 행과 요약 안에 있나
+                in_summary = {i for s in ctx.summaries for i in ctx.handles[s["handle"]]["ids"]}
+                for s in ctx.summaries:
+                    r = by_name[s["query"]]
+                    ids = [row.id for row in r.rows]
+                    s["coverage"] = {"matched": r.matched, "shown": sum(1 for i in ids if i in ctx.seen),
+                                     "summarized": ctx.handles[s["handle"]]["count"],
+                                     "complete": r.matched == len(ids) and all(i in ctx.seen or i in in_summary for i in ids)}
             for o in offers:                                    # 본 개체에만 도구를
                 t = [x for x in o.targets if x in ctx.seen]
                 if t:

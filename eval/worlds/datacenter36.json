@@ -1,0 +1,591 @@
+{
+ "now": 1000,
+ "models": [
+  {
+   "name": "Rack",
+   "description": "랙. 전력은 PDU 가 잰다",
+   "properties": {
+    "power_kw": {
+     "type": "number",
+     "unit": "kW",
+     "min": 0,
+     "max": 50,
+     "ttl": 120
+    }
+   },
+   "bindings": [
+    {
+     "signal": "pdu_kw",
+     "property": "power_kw"
+    }
+   ]
+  },
+  {
+   "name": "Server",
+   "properties": {
+    "temp_c": {
+     "type": "number",
+     "unit": "C",
+     "min": -40,
+     "max": 150,
+     "ttl": 60
+    },
+    "fan": {
+     "type": "enum",
+     "values": [
+      "ok",
+      "failed"
+     ],
+     "ttl": 300
+    },
+    "throttled": {
+     "type": "bool",
+     "ttl": 600
+    },
+    "ticket": {
+     "type": "string"
+    }
+   },
+   "bindings": [
+    {
+     "signal": "cpu_temp",
+     "property": "temp_c"
+    },
+    {
+     "signal": "cpu_temp_f",
+     "property": "temp_c",
+     "transform": [
+      [
+       "offset",
+       -32
+      ],
+      [
+       "scale",
+       0.5555556
+      ],
+      [
+       "round",
+       1
+      ]
+     ]
+    },
+    {
+     "signal": "fan_state",
+     "property": "fan"
+    },
+    {
+     "signal": "throttle_ack",
+     "property": "throttled"
+    },
+    {
+     "signal": "ticket",
+     "property": "ticket"
+    }
+   ],
+   "derived": {
+    "status": {
+     "cases": [
+      {
+       "when": [
+        [
+         "temp_c",
+         ">=",
+         90
+        ]
+       ],
+       "value": "critical"
+      },
+      {
+       "when": [
+        [
+         "temp_c",
+         ">=",
+         80
+        ]
+       ],
+       "value": "hot"
+      }
+     ],
+     "default": "normal"
+    }
+   }
+  }
+ ],
+ "relationships": [
+  {
+   "name": "contains",
+   "source": "Rack",
+   "target": "Server",
+   "cardinality": "1:N"
+  }
+ ],
+ "entities": [
+  {
+   "id": "rack1",
+   "model": "Rack"
+  },
+  {
+   "id": "rack2",
+   "model": "Rack"
+  },
+  {
+   "id": "srv01",
+   "model": "Server"
+  },
+  {
+   "id": "srv02",
+   "model": "Server"
+  },
+  {
+   "id": "srv03",
+   "model": "Server"
+  },
+  {
+   "id": "srv04",
+   "model": "Server"
+  },
+  {
+   "id": "srv05",
+   "model": "Server"
+  },
+  {
+   "id": "srv06",
+   "model": "Server"
+  },
+  {
+   "id": "srv07",
+   "model": "Server"
+  },
+  {
+   "id": "srv08",
+   "model": "Server"
+  },
+  {
+   "id": "srv09",
+   "model": "Server"
+  },
+  {
+   "id": "srv10",
+   "model": "Server"
+  },
+  {
+   "id": "srv11",
+   "model": "Server"
+  },
+  {
+   "id": "srv12",
+   "model": "Server"
+  },
+  {
+   "id": "srv13",
+   "model": "Server"
+  },
+  {
+   "id": "srv14",
+   "model": "Server"
+  },
+  {
+   "id": "srv15",
+   "model": "Server"
+  },
+  {
+   "id": "srv16",
+   "model": "Server"
+  },
+  {
+   "id": "srv17",
+   "model": "Server"
+  },
+  {
+   "id": "srv18",
+   "model": "Server"
+  },
+  {
+   "id": "srv19",
+   "model": "Server"
+  },
+  {
+   "id": "srv20",
+   "model": "Server"
+  },
+  {
+   "id": "srv21",
+   "model": "Server"
+  },
+  {
+   "id": "srv22",
+   "model": "Server"
+  },
+  {
+   "id": "srv23",
+   "model": "Server"
+  },
+  {
+   "id": "srv24",
+   "model": "Server"
+  },
+  {
+   "id": "srv25",
+   "model": "Server"
+  },
+  {
+   "id": "srv26",
+   "model": "Server"
+  },
+  {
+   "id": "srv27",
+   "model": "Server"
+  },
+  {
+   "id": "srv28",
+   "model": "Server"
+  },
+  {
+   "id": "srv29",
+   "model": "Server"
+  },
+  {
+   "id": "srv30",
+   "model": "Server"
+  },
+  {
+   "id": "srv31",
+   "model": "Server"
+  },
+  {
+   "id": "srv32",
+   "model": "Server"
+  },
+  {
+   "id": "srv33",
+   "model": "Server"
+  },
+  {
+   "id": "srv34",
+   "model": "Server"
+  },
+  {
+   "id": "srv35",
+   "model": "Server"
+  },
+  {
+   "id": "srv36",
+   "model": "Server"
+  }
+ ],
+ "edges": [
+  [
+   "contains",
+   "rack1",
+   "srv01"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv02"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv03"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv04"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv05"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv06"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv07"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv08"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv09"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv10"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv11"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv12"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv13"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv14"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv15"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv16"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv17"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv18"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv19"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv20"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv21"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv22"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv23"
+  ],
+  [
+   "contains",
+   "rack1",
+   "srv24"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv25"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv26"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv27"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv28"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv29"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv30"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv31"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv32"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv33"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv34"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv35"
+  ],
+  [
+   "contains",
+   "rack2",
+   "srv36"
+  ]
+ ],
+ "tools": [
+  {
+   "name": "throttle",
+   "target_model": "Server",
+   "risk": "local",
+   "description": "CPU 클럭을 낮춘다(되돌릴 수 있다)",
+   "params": {
+    "level": {
+     "type": "integer",
+     "min": 1,
+     "max": 3
+    }
+   },
+   "preconditions": [
+    [
+     "status",
+     "in",
+     [
+      "hot",
+      "critical"
+     ]
+    ]
+   ],
+   "effect": [
+    {
+     "signal": "throttle_ack",
+     "value": true
+    }
+   ]
+  },
+  {
+   "name": "reboot",
+   "target_model": "Server",
+   "risk": "irreversible",
+   "description": "재부팅한다(돌던 작업을 잃는다)",
+   "preconditions": [
+    [
+     "status",
+     "==",
+     "critical"
+    ]
+   ],
+   "effect": [
+    {
+     "signal": "reboot_ack",
+     "value": true
+    }
+   ]
+  },
+  {
+   "name": "open_ticket",
+   "target_model": "Server",
+   "risk": "external",
+   "description": "현장 팀에 티켓을 연다",
+   "params": {
+    "note": {
+     "type": "string"
+    }
+   },
+   "preconditions": [
+    [
+     "fan",
+     "==",
+     "failed"
+    ]
+   ],
+   "effect": [
+    {
+     "signal": "ticket",
+     "value": "$note"
+    }
+   ]
+  }
+ ],
+ "queries": [
+  {
+   "name": "attention",
+   "model": "Server",
+   "where": [
+    [
+     "status",
+     "in",
+     [
+      "hot",
+      "critical"
+     ]
+    ]
+   ],
+   "select": [
+    "temp_c",
+    "status",
+    "fan"
+   ],
+   "must": [
+    [
+     "status",
+     "==",
+     "critical"
+    ]
+   ],
+   "priority": 0
+  },
+  {
+   "name": "fleet",
+   "model": "Server",
+   "select": [
+    "temp_c",
+    "status",
+    "fan"
+   ],
+   "priority": 1,
+   "must": [
+    [
+     "fan",
+     "==",
+     "failed"
+    ]
+   ]
+  },
+  {
+   "name": "racks",
+   "model": "Rack",
+   "select": [
+    "power_kw"
+   ],
+   "priority": 2
+  }
+ ],
+ "policy": {
+  "budget_chars": 1500,
+  "summarize_min": 3
+ },
+ "grants": []
+}

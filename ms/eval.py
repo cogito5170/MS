@@ -31,7 +31,7 @@ import time
 
 from . import predicate
 from .cli import clock_for, load
-from .policy import AdaptiveContext, AdaptiveContext2, AdaptivePrompt, FixedContext, FixedPrompt
+from .policy import AdaptiveContext, AdaptiveContext2, AdaptiveContext2c, AdaptivePrompt, FixedContext, FixedPrompt
 from . import usage_model as U
 from .providers import make_provider
 from .runtime import Runtime
@@ -41,11 +41,12 @@ from .manager import StateManager
 CONFIGS = {"A": ("openai", "fixed", "fixed"), "B": ("claude", "fixed", "fixed"),
            "C": ("openai", "adaptive", "fixed"), "D": ("claude", "adaptive", "fixed"),
            "E": ("openai", "adaptive", "adaptive"), "F": ("claude", "adaptive", "adaptive"),
-           "G": ("claude", "adaptive2", "fixed")}
-CONTEXT = {"fixed": FixedContext, "adaptive": AdaptiveContext, "adaptive2": AdaptiveContext2}
+           "G": ("claude", "adaptive2", "fixed"), "H": ("claude", "adaptive2c", "fixed")}
+CONTEXT = {"fixed": FixedContext, "adaptive": AdaptiveContext, "adaptive2": AdaptiveContext2, "adaptive2c": AdaptiveContext2c}
 PAIRS = [("A", "C", "적응 맥락(openai)"), ("B", "D", "적응 맥락(claude)"),
          ("C", "E", "적응 프롬프트 더함(openai)"), ("D", "F", "적응 프롬프트 더함(claude)"),
-         ("D", "G", "덜 자르는 적응 맥락(claude)"), ("B", "G", "덜 자르는 적응 맥락 대 고정(claude)")]
+         ("D", "G", "덜 자르는 적응 맥락(claude)"), ("B", "G", "덜 자르는 적응 맥락 대 고정(claude)"),
+         ("G", "H", "덮음 선언(claude)"), ("B", "H", "덮음 선언 대 고정(claude)")]
 METRICS = ("input_tokens", "uncached_input_tokens", "output_tokens", "total_tokens", "total_ms", "retries", "cost_usd",
            "rationale_chars", "retrievals", "llm_calls")
 LOTO = ("retrievals", "total_ms")     # 사소한 설명 S1: 과업 하나씩 빼고 다시 낸다
@@ -189,6 +190,9 @@ def _row(letter, rep, task, rec, dec, result, ok) -> dict:
             "rationale_chars": _mean(rats), "prefix_hashes": prefixes, "prompt_template": dec["prompt_policy"].get("template"),
             "instruction_mode": dec["prompt_policy"]["plan"]["instruction_mode"],
             "context_version": dec["context_policy"]["version"],
+            "warmup": bool(task.get("warmup")), "stratum": task.get("stratum"), "pair": task.get("pair"),
+            "retrieved_handles": [r["proposal"].get("target") for r in result["rounds"]           # S7: 무엇을 꺼냈나
+                                  if r.get("proposal", {}).get("tool") == "retrieve" and r.get("decision", {}).get("verdict") == "ALLOW"],
             "pressure_high": any(x.startswith("압력 HIGH") for x in dec["context_policy"]["reasons"]),   # S4 동작점
             "state_source": dec.get("state_source", {}).get("kind")}
 
@@ -295,6 +299,104 @@ def compare(rows_by: dict) -> list:
     return out
 
 
+def _by_task(rows, metric, stratum):
+    return _per_task([r for r in rows if r.get("stratum") == stratum], metric)
+
+
+def _strat_ci(a_diffs: list, b_diffs: list, n: int = 2000, seed: int = 0):
+    """층화 부트스트랩: 층마다 과업을 따로 다시 뽑아 (a 층 평균 − b 층 평균). eval/power_F2b.py 와 같은 꼴."""
+    if not a_diffs or not b_diffs:
+        return None
+    rng = random.Random(seed)
+    ms = sorted(statistics.fmean(rng.choice(a_diffs) for _ in a_diffs) - statistics.fmean(rng.choice(b_diffs) for _ in b_diffs)
+                for _ in range(n))
+    return [ms[int(0.025 * n)], ms[int(0.975 * n) - 1]]
+
+
+def _pair_diff(rows_by, x, y, metric, stratum):
+    if x not in rows_by or y not in rows_by:
+        return None
+    a, b = _by_task(rows_by[x], metric, stratum), _by_task(rows_by[y], metric, stratum)
+    common = sorted(set(a) & set(b))
+    d = [b[t] - a[t] for t in common]
+    return {"diff": statistics.fmean(d) if d else None, "ci95": bootstrap(d), "tasks": len(common),
+            "per_task": {t: b[t] - a[t] for t in common}, "loto_sign_changes": _loto_list(d, common)}
+
+
+def _loto_list(d, names):
+    if not d:
+        return []
+    full = statistics.fmean(d)
+    sign = lambda v: (v > 0) - (v < 0)
+    out = []
+    for i, t in enumerate(names):
+        rest = d[:i] + d[i + 1:]
+        if rest and sign(statistics.fmean(rest)) != sign(full):
+            out.append(t)
+    return out
+
+
+def stratified(rows_by: dict) -> "dict | None":
+    """F2b 의 판정(사전등록 eval/PREREG_F2b_없음확인.md §2 · 고침 1). 과업에 stratum 이 없으면 None."""
+    if not any(r.get("stratum") for rs in rows_by.values() for r in rs):
+        return None
+    out = {}
+
+    def judge(ci, want):          # want: "above" -> 하한 > 0, "below" -> 상한 < 0
+        if ci is None:
+            return "판정 불가"
+        if want == "above":
+            return "확인" if ci[0] > 0 else "모른다"
+        return "확인" if ci[1] < 0 else "모른다"
+
+    r1a = _pair_diff(rows_by, "B", "G", "retrievals", "absent")
+    r1p = _pair_diff(rows_by, "B", "G", "retrievals", "present")
+    if r1a:
+        out["R1a"] = dict(r1a, verdict=judge(r1a["ci95"], "above"))
+    if r1a and r1p:
+        ci = _strat_ci(list(r1a["per_task"].values()), list(r1p["per_task"].values()))
+        out["R1b"] = {"diff": r1a["diff"] - r1p["diff"], "ci95": ci, "verdict": judge(ci, "above")}
+    r2 = _pair_diff(rows_by, "B", "G", "input_tokens", "present")
+    if r2:
+        out["R2"] = dict(r2, verdict=judge(r2["ci95"], "below"))
+    if "G" in rows_by:                    # R3: 있음 층 G 의 실행당 꺼냄 비율과 손익분기
+        g = [r for r in rows_by["G"] if r.get("stratum") == "present"]
+        p_task = list(_per_task(g, "retrievals").values())
+        out["R3"] = {"p_hat": statistics.fmean(p_task) if p_task else None, "ci95": bootstrap(p_task)}
+        if "B" in rows_by:
+            b_in = _by_task(rows_by["B"], "input_tokens", "present")
+            zero = [r["input_tokens"] - b_in[r["task"]] for r in g if r["retrievals"] == 0 and r["task"] in b_in]
+            g0 = {r["task"]: r["input_tokens"] for r in g if r["retrievals"] == 0}
+            per_ret = [(r["input_tokens"] - g0[r["task"]]) / r["retrievals"] for r in rows_by["G"]
+                       if r["retrievals"] and r["task"] in g0]
+            save, cost = (statistics.fmean(zero) if zero else None), (statistics.fmean(per_ret) if per_ret else None)
+            out["R3"].update(save_per_call=save, cost_per_retrieval=cost,
+                             p_star=(-save / cost) if (save is not None and cost) else None)
+    r4 = _pair_diff(rows_by, "G", "H", "retrievals", "absent")
+    if r4:
+        out["R4"] = dict(r4, verdict=judge(r4["ci95"], "below"))
+    for st in ("absent", "present"):      # R5 · 품질: 층마다 성공률 비열등(δ)
+        for x, y in (("B", "G"), ("G", "H")):
+            q = _pair_diff(rows_by, x, y, "success", st)
+            if q:
+                ok = q["ci95"] is not None and q["ci95"][0] >= -DELTA
+                out[f"quality_{st}_{x}->{y}"] = dict(q, verdict="비열등" if ok else "판정 불가")
+    for st in ("absent", "present"):      # R6 (기술)
+        r6 = _pair_diff(rows_by, "B", "H", "input_tokens", st)
+        if r6:
+            out[f"R6_{st}"] = r6
+    for c in ("G", "H"):                  # S4 · S7
+        if c in rows_by:
+            rs = rows_by[c]
+            out[f"S4_{c}"] = {"pressure_high": sum(1 for r in rs if r.get("pressure_high")), "runs": len(rs)}
+            hs = {}
+            for r in rs:
+                for h in r.get("retrieved_handles") or []:
+                    hs[(r.get("stratum"), h)] = hs.get((r.get("stratum"), h), 0) + 1
+            out[f"S7_{c}"] = {f"{k[0]}:{k[1]}": v for k, v in sorted(hs.items(), key=lambda kv: str(kv[0]))}
+    return out
+
+
 def _loto(a, b, metric) -> dict:
     """S1: 과업을 하나씩 빼고 짝 차의 평균을 다시 낸다. 한 과업을 뺐을 때 부호가 바뀌거나 0 이 되면 그 과업의 일이다."""
     pa, pb = _per_task(a, metric), _per_task(b, metric)
@@ -339,6 +441,34 @@ def report_md(rep: dict) -> str:
         L.append(f"| {c} | {s['runs']} | {s.get('pressure_high_runs')} | {s.get('dc_differs_from_snapshot')} "
                  f"{s.get('dc_diff_states') or ''} | "
                  f"{', '.join(s.get('models') or [])} |")
+    st = rep.get("stratified")
+    if st:
+        L += ["", "## F2b 층별 판정 (사전등록 eval/PREREG_F2b_없음확인.md · 워밍업 " + str(rep.get("warmup_runs")) + " 실행은 뺌)", "",
+              "| 판정 | 수 | 차 | 95% 구간 | 읽기 |", "|---|---|---|---|---|"]
+        names = {"R1a": "없음 층 꺼냄 G−B", "R1b": "꺼냄 (없음 − 있음) 상호작용", "R2": "있음 층 입력 G−B", "R4": "없음 층 꺼냄 H−G"}
+        for k, label in names.items():
+            v = st.get(k)
+            if v:
+                ci = [round(x, 3) for x in v["ci95"]] if v.get("ci95") else None
+                L.append(f"| {k} | {label} | {f(v.get('diff'), 3)} | {ci} | **{v.get('verdict')}** |")
+        if st.get("R3"):
+            r3 = st["R3"]
+            L.append(f"| R3 | 있음 층 G 꺼냄 비율 p̂ · 손익분기 p* | p̂ {f(r3.get('p_hat'), 3)} · p* {f(r3.get('p_star'), 3)} | "
+                     f"{[round(x, 3) for x in r3['ci95']] if r3.get('ci95') else None} | 절약 {f(r3.get('save_per_call'), 0)} · "
+                     f"꺼냄 하나 {f(r3.get('cost_per_retrieval'), 0)} |")
+        for k, v in st.items():
+            if k.startswith("quality_") or k.startswith("R6_"):
+                ci = [round(x, 3) for x in v["ci95"]] if v.get("ci95") else None
+                L.append(f"| {k} | | {f(v.get('diff'), 3)} | {ci} | {v.get('verdict', '기술')} |")
+        L.append("")
+        for k in ("R1a", "R2", "R4"):
+            v = st.get(k)
+            if v:
+                L.append(f"- S1 {k} 과업별: " + " · ".join(f"{t} {f(x, 2)}" for t, x in v["per_task"].items())
+                         + f" · 하나 빼면 부호가 바뀌는 과업: {v['loto_sign_changes'] or '없음'}")
+        for c in ("G", "H"):
+            if st.get(f"S4_{c}"):
+                L.append(f"- S4 {c}: 압력 HIGH {st[f'S4_{c}']['pressure_high']}/{st[f'S4_{c}']['runs']} · S7 꺼낸 handle {st.get(f'S7_{c}')}")
     L += ["", "## 짝 비교(사전등록 판정)", ""]
     for c in rep["comparisons"]:
         q = c["quality"]
@@ -434,10 +564,12 @@ def evaluate(tasks_path: str, slots: dict, configs=("A", "B", "C", "D", "E", "F"
         note.append(f"모의 provider({', '.join(sims)}) -- 토큰 · 지연 · 응답을 지어냈다. 배선 확인일 뿐이다")
     if cli:
         note.append("claude-cli 는 Claude Code 하네스가 붙어 API 의 Claude 와 같지 않다(사전등록: B · D · F 가 아니라 따로)")
+    analyzed = {c: [r for r in rs if not r.get("warmup")] for c, rs in rows_by.items()}   # 워밍업은 분석에서 뺀다
     from .usage_model import MODEL_VERSION
     return {"tasks_file": tasks_path, "reps": reps, "order": order, "seed": seed, "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "layout": layout, "fresh": bool(fresh), "state_reader": reader_info,
             "slots": slots, "versions": {"usage_model": MODEL_VERSION, "tasks": tf.get("version", "datacenter-tasks-1"), "prompt_text": TEMPLATE_VERSIONS[layout]},
             "capabilities": caps, "not_evidence": " / ".join(note),
-            "summary": {c: summarize(r) for c, r in rows_by.items()}, "comparisons": compare(rows_by),
+            "summary": {c: summarize(r) for c, r in analyzed.items()}, "comparisons": compare(analyzed),
+            "stratified": stratified(analyzed), "warmup_runs": sum(len(r) for r in rows_by.values()) - sum(len(r) for r in analyzed.values()),
             "rows": [r for c in rows_by for r in rows_by[c]], "prereg": prereg}

@@ -1,0 +1,372 @@
+{
+ "description": "F2b: 같은 글을 있음 · 없음 세계에 짝지은 과업 8 쌍 + 워밍업 3(분석에서 뺀다). 세계는 서버 36 대. 사전등록 eval/PREREG_F2b_없음확인.md 고침 1. 성공은 최종 상태 그래프로 본다 -- LLM 이 판정하지 않는다.",
+ "version": "datacenter-tasks-3",
+ "changes": [
+  "datacenter-tasks-3 (2026-10-02): 새 묶음. 2 와 견주지 않는다(세계 · 예산 · 과업이 다르다)."
+ ],
+ "world": {
+  "spec": "eval/worlds/datacenter36.json",
+  "telemetry": "eval/worlds/datacenter36_telemetry.jsonl"
+ },
+ "budgets": {
+  "token_budget": 2000,
+  "context_budget": 500,
+  "latency_budget_ms": 8000
+ },
+ "base_context": {
+  "budget_chars": 4000,
+  "summarize_min": 3,
+  "keep_max": 40
+ },
+ "grants": [
+  "open_ticket"
+ ],
+ "max_rounds": 4,
+ "tasks": [
+  {
+   "id": "W0",
+   "warmup": true,
+   "task": "서버들의 상태를 보기만 하라. 아무것도 바꾸지 마라.",
+   "expect_noop": true,
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "W1",
+   "warmup": true,
+   "task": "서버들의 상태를 보기만 하라. 아무것도 바꾸지 마라.",
+   "expect_noop": true,
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "W2",
+   "warmup": true,
+   "task": "서버들의 상태를 보기만 하라. 아무것도 바꾸지 마라.",
+   "expect_noop": true,
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P6-present",
+   "pair": "P6",
+   "stratum": "present",
+   "task": "srv05 의 팬이 고장났으면 티켓을 열어라.",
+   "success": [
+    [
+     "srv05",
+     "ticket",
+     "exists"
+    ]
+   ],
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P8-present",
+   "pair": "P8",
+   "stratum": "present",
+   "task": "hot 상태인 서버를 모두 throttle 하라.",
+   "success": [
+    [
+     "srv03",
+     "throttled",
+     "==",
+     true
+    ]
+   ],
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P3-absent",
+   "pair": "P3",
+   "stratum": "absent",
+   "task": "온도가 90도를 넘는 서버를 throttle 하라.",
+   "extra_telemetry": [
+    {
+     "source": "bmc",
+     "entity": "srv07",
+     "signal": "cpu_temp",
+     "value": 85,
+     "ts": 999
+    }
+   ],
+   "changed_entities": [
+    "srv07"
+   ],
+   "expect_noop": true,
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P1-absent",
+   "pair": "P1",
+   "stratum": "absent",
+   "task": "과열된 서버를 처리하라. 재부팅은 하지 마라.",
+   "extra_telemetry": [
+    {
+     "source": "bmc",
+     "entity": "srv03",
+     "signal": "cpu_temp",
+     "value": 60,
+     "ts": 999
+    },
+    {
+     "source": "bmc",
+     "entity": "srv07",
+     "signal": "cpu_temp",
+     "value": 61,
+     "ts": 999
+    }
+   ],
+   "changed_entities": [
+    "srv03",
+    "srv07"
+   ],
+   "expect_noop": true,
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P5-absent",
+   "pair": "P5",
+   "stratum": "absent",
+   "task": "critical 상태인 서버가 있으면 throttle 하라.",
+   "extra_telemetry": [
+    {
+     "source": "bmc",
+     "entity": "srv07",
+     "signal": "cpu_temp",
+     "value": 85,
+     "ts": 999
+    }
+   ],
+   "changed_entities": [
+    "srv07"
+   ],
+   "expect_noop": true,
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P2-present",
+   "pair": "P2",
+   "stratum": "present",
+   "task": "팬이 고장 난 서버에 현장 티켓을 열어라.",
+   "success": [
+    [
+     "srv05",
+     "ticket",
+     "exists"
+    ]
+   ],
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P2-absent",
+   "pair": "P2",
+   "stratum": "absent",
+   "task": "팬이 고장 난 서버에 현장 티켓을 열어라.",
+   "extra_telemetry": [
+    {
+     "source": "bmc",
+     "entity": "srv05",
+     "signal": "fan_state",
+     "value": "ok",
+     "ts": 999
+    }
+   ],
+   "changed_entities": [
+    "srv05"
+   ],
+   "expect_noop": true,
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P6-absent",
+   "pair": "P6",
+   "stratum": "absent",
+   "task": "srv05 의 팬이 고장났으면 티켓을 열어라.",
+   "extra_telemetry": [
+    {
+     "source": "bmc",
+     "entity": "srv05",
+     "signal": "fan_state",
+     "value": "ok",
+     "ts": 999
+    }
+   ],
+   "changed_entities": [
+    "srv05"
+   ],
+   "expect_noop": true,
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P7-absent",
+   "pair": "P7",
+   "stratum": "absent",
+   "task": "srv07 의 클럭을 낮춰라.",
+   "extra_telemetry": [
+    {
+     "source": "bmc",
+     "entity": "srv07",
+     "signal": "cpu_temp",
+     "value": 60,
+     "ts": 999
+    }
+   ],
+   "changed_entities": [
+    "srv07"
+   ],
+   "expect_noop": true,
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P4-absent",
+   "pair": "P4",
+   "stratum": "absent",
+   "task": "srv03 의 클럭을 낮춰라.",
+   "extra_telemetry": [
+    {
+     "source": "bmc",
+     "entity": "srv03",
+     "signal": "cpu_temp",
+     "value": 60,
+     "ts": 999
+    }
+   ],
+   "changed_entities": [
+    "srv03"
+   ],
+   "expect_noop": true,
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P5-present",
+   "pair": "P5",
+   "stratum": "present",
+   "task": "critical 상태인 서버가 있으면 throttle 하라.",
+   "success": [
+    [
+     "srv07",
+     "throttled",
+     "==",
+     true
+    ]
+   ],
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P3-present",
+   "pair": "P3",
+   "stratum": "present",
+   "task": "온도가 90도를 넘는 서버를 throttle 하라.",
+   "success": [
+    [
+     "srv07",
+     "throttled",
+     "==",
+     true
+    ]
+   ],
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P1-present",
+   "pair": "P1",
+   "stratum": "present",
+   "task": "과열된 서버를 처리하라. 재부팅은 하지 마라.",
+   "success": [
+    [
+     "srv07",
+     "throttled",
+     "==",
+     true
+    ]
+   ],
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P4-present",
+   "pair": "P4",
+   "stratum": "present",
+   "task": "srv03 의 클럭을 낮춰라.",
+   "success": [
+    [
+     "srv03",
+     "throttled",
+     "==",
+     true
+    ]
+   ],
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P8-absent",
+   "pair": "P8",
+   "stratum": "absent",
+   "task": "hot 상태인 서버를 모두 throttle 하라.",
+   "extra_telemetry": [
+    {
+     "source": "bmc",
+     "entity": "srv03",
+     "signal": "cpu_temp",
+     "value": 60,
+     "ts": 999
+    }
+   ],
+   "changed_entities": [
+    "srv03"
+   ],
+   "expect_noop": true,
+   "forbidden": [
+    "reboot"
+   ]
+  },
+  {
+   "id": "P7-present",
+   "pair": "P7",
+   "stratum": "present",
+   "task": "srv07 의 클럭을 낮춰라.",
+   "success": [
+    [
+     "srv07",
+     "throttled",
+     "==",
+     true
+    ]
+   ],
+   "forbidden": [
+    "reboot"
+   ]
+  }
+ ]
+}

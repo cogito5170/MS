@@ -1171,6 +1171,154 @@ class LessCuttingContext(unittest.TestCase):
         self.assertTrue(replay(json.loads(json.dumps(dec)))["ok"])
 
 
+class F2bBundle(unittest.TestCase):
+    """F2b(사전등록 eval/PREREG_F2b_없음확인.md 고침 1)의 과업 묶음 · 칸 H · 층별 판정. 돌리기 전에 설계가 맞는지 본다."""
+    TF = os.path.join(ROOT, "eval", "tasks", "datacenter_tasks3.json")
+
+    def _tf(self):
+        return json.load(open(self.TF, encoding="utf-8"))
+
+    def _world(self, tf, task):
+        from ms.eval import _world
+        from ms.cli import clock_for
+        return _world(tf, task, clock_for(json.load(open(os.path.join(ROOT, tf["world"]["spec"]), encoding="utf-8"))))
+
+    def test_generated_files_are_reproducible(self):
+        sys.path.insert(0, os.path.join(ROOT, "eval", "worlds"))
+        sys.path.insert(0, os.path.join(ROOT, "eval", "tasks"))
+        import make_datacenter36, make_datacenter_tasks3
+        spec, tel = make_datacenter36.build()
+        self.assertEqual(spec, open(os.path.join(ROOT, "eval", "worlds", "datacenter36.json"), encoding="utf-8").read())
+        self.assertEqual(tel, open(os.path.join(ROOT, "eval", "worlds", "datacenter36_telemetry.jsonl"), encoding="utf-8").read())
+        self.assertEqual(make_datacenter_tasks3.build(), open(self.TF, encoding="utf-8").read())
+
+    def test_bundle_shape(self):
+        tf = self._tf()
+        self.assertEqual(tf["version"], "datacenter-tasks-3")
+        ts = tf["tasks"]
+        self.assertEqual([t["id"] for t in ts[:3]], ["W0", "W1", "W2"])
+        self.assertTrue(all(t.get("warmup") for t in ts[:3]))
+        rest = ts[3:]
+        self.assertEqual(len(rest), 16)
+        pairs = {}
+        for t in rest:
+            pairs.setdefault(t["pair"], {})[t["stratum"]] = t
+        self.assertEqual(len(pairs), 8)
+        for p, d in pairs.items():
+            self.assertEqual(set(d), {"absent", "present"})
+            self.assertEqual(d["absent"]["task"].encode(), d["present"]["task"].encode())      # 글이 바이트까지 같다
+            self.assertTrue(d["absent"].get("expect_noop"))
+            self.assertTrue(d["present"].get("success"))
+
+    def test_S6_pair_worlds_differ_only_in_the_target(self):
+        tf = self._tf()
+        for t in [x for x in tf["tasks"] if x.get("stratum") == "absent"]:
+            pres = next(x for x in tf["tasks"] if x.get("pair") == t["pair"] and x["stratum"] == "present")
+            _, wa, _ = self._world(tf, t)
+            _, wp, _ = self._world(tf, pres)
+            vals = lambda w: {nid: {k: v.value for k, v in n.props.items()} for nid, n in w.graph.nodes.items()}
+            va, vp = vals(wa), vals(wp)
+            changed = {nid for nid in set(va) | set(vp) if va.get(nid) != vp.get(nid)}
+            self.assertEqual(changed, set(t["changed_entities"]), t["id"])
+            # 없음 세계에서는 성공 기준의 목표가 실제로 없다: 있음 과업의 도구 조건이 목표에 안 맞는다
+            from ms.query import unmet
+            tool = {"throttled": "throttle", "ticket": "open_ticket"}[pres["success"][0][1]]
+            target = pres["success"][0][0]
+            self.assertEqual(unmet(_tool(self, tf, tool), target, wp), [], pres["id"])          # 있음: 목표에 도구를 쓸 수 있다
+            # 없음: 목표에 도구 조건이 안 맞는다. P3 · P5 는 근처 미끼(srv07 85 ℃ = hot)라 throttle 은 되지만 과업 조건(90 초과 ·
+            # critical)이 아니다 -- 상태로 확인한다
+            if t["pair"] in ("P3", "P5"):
+                self.assertEqual(wa.graph.nodes["srv07"].props["status"].value, "hot")
+            else:
+                self.assertTrue(unmet(_tool(self, tf, tool), target, wa), t["id"])
+
+    def test_B_cannot_retrieve_and_G_H_hide_rows(self):
+        from ms.cr import ContextRuntime
+        from ms.policy import AdaptiveContext2, AdaptiveContext2c
+        tf = self._tf()
+        high = dict({k: None for k in U.STATES}, token_budget_pressure="HIGH")
+        for t in tf["tasks"]:
+            spec, w, reg = self._world(tf, t)
+            for name, sel, st in (("B", FixedContext(), {k: None for k in U.STATES}), ("G", AdaptiveContext2(), high),
+                                  ("H", AdaptiveContext2c(), high)):
+                plan = ContextRuntime.plan(st, sel, FixedPrompt(), tf["base_context"])
+                p = json.loads(ContextRuntime.from_plan(reg, plan).minimal_context(w, t["task"], spec["queries"]).render())
+                tools = {x["name"] for x in p["tools"]}
+                if name == "B":
+                    self.assertEqual((p["handles"], "retrieve" in tools), ({}, False), t["id"])   # B 는 꺼낼 수 없다
+                else:
+                    self.assertIn("retrieve", tools, (name, t["id"]))                              # G · H 는 행을 숨긴다
+                    covs = [s.get("coverage") for s in p["summaries"]]
+                    if name == "G":
+                        self.assertEqual(covs, [None] * len(covs))
+                    else:
+                        self.assertTrue(covs and all(c["complete"] and c["shown"] + c["summarized"] <= c["matched"] for c in covs))
+
+    def test_coverage_is_false_when_limit_cuts(self):
+        from ms.context import ContextPolicy
+        spec, m, reg, *_ = world()
+        q = StateQuery("fleet", model="Server", select=["temp_c", "status"], limit=8)
+        res = run_query(q, m)
+        self.assertGreater(res.matched, len(res.rows))
+        ctx = ContextPolicy(budget_chars=3000, summarize_min=3, keep_max=2, coverage=True).build("t", [res])
+        cov = [s["coverage"] for s in ctx.summaries]
+        self.assertTrue(cov)
+        self.assertEqual({c["complete"] for c in cov}, {False})                                    # limit 로 빠진 행이 있다
+        self.assertEqual(cov[0]["matched"], res.matched)
+
+    def test_H_equals_G_plan_and_default_when_undecided(self):
+        from ms.policy import AdaptiveContext2, AdaptiveContext2c, default_context_plan
+        base = dict(BASE_CONTEXT, budget_chars=4000, keep_max=40)
+        unknown = {k: None for k in U.STATES}
+        self.assertEqual(AdaptiveContext2c().plan(unknown, base)["params"], default_context_plan("KEEP", base)["params"])
+        high = dict(unknown, token_budget_pressure="HIGH")
+        g, h = AdaptiveContext2().plan(high, base)["params"], AdaptiveContext2c().plan(high, base)["params"]
+        self.assertEqual(dict(h), dict(g, coverage=True))
+
+    def test_stratified_judgement_on_synthetic_rows(self):
+        """층별 판정이 맞게 갈리는지 -- 결과를 손으로 지은 행으로 본다(없음 층에서만 G 가 꺼낸다)."""
+        from ms.eval import stratified
+        rows = {"B": [], "G": [], "H": []}
+        for i in range(8):
+            for st in ("absent", "present"):
+                task = f"P{i}-{st}"
+                for rep in range(3):
+                    base = {"task": task, "stratum": st, "success": True, "pressure_high": True, "retrieved_handles": []}
+                    rows["B"].append(dict(base, retrievals=0, input_tokens=3600))
+                    k = 2 if st == "absent" else 0
+                    rows["G"].append(dict(base, retrievals=k, input_tokens=2600 + 3000 * k))
+                    kh = 1 if st == "absent" else 0
+                    rows["H"].append(dict(base, retrievals=kh, input_tokens=2620 + 3000 * kh))
+        out = stratified(rows)
+        self.assertEqual(out["R1a"]["verdict"], "확인")
+        self.assertEqual(out["R1b"]["verdict"], "확인")
+        self.assertEqual(out["R2"]["verdict"], "확인")
+        self.assertEqual(out["R4"]["verdict"], "확인")
+        self.assertAlmostEqual(out["R3"]["save_per_call"], -1000)
+        self.assertEqual(out["quality_present_G->H"]["verdict"], "비열등")
+        self.assertIsNone(stratified({"B": [{"task": "t", "success": True}]}))                    # 층이 없으면 없음
+        one = {c: [dict(r, retrievals=(2 if (c != "B" and r["task"] == "P0-absent") else 0)) for r in rs]
+               for c, rs in rows.items()}                                   # 여덟 없음 과업 중 하나만 꺼낸다 -> 하한 0
+        self.assertEqual(stratified(one)["R1a"]["ci95"][0], 0)
+        self.assertEqual(stratified(one)["R1a"]["verdict"], "모른다")
+
+    def test_harness_runs_the_bundle(self):
+        from ms.eval import evaluate, report_md
+        rep = evaluate(self.TF, {"claude": "sim-claude"}, ("B", "G", "H"), reps=1, log=lambda *a: None,
+                       prereg="eval/PREREG_F2b_없음확인.md")
+        self.assertEqual(rep["warmup_runs"], 9)
+        self.assertEqual({c: s["runs"] for c, s in rep["summary"].items()}, {"B": 16, "G": 16, "H": 16})
+        self.assertEqual(rep["versions"]["tasks"], "datacenter-tasks-3")
+        self.assertIn("R2", rep["stratified"])
+        self.assertIn("F2b 층별 판정", report_md(rep))
+
+
+def _tool(case, tf, name):
+    from ms.tools import ToolRegistry
+    spec = json.load(open(os.path.join(ROOT, tf["world"]["spec"]), encoding="utf-8"))
+    return ToolRegistry(spec["tools"]).tools[name]
+
+
 def spec_of(tf):
     return json.load(open(os.path.join(ROOT, tf["world"]["spec"]), encoding="utf-8"))
 
