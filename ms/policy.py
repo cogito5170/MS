@@ -241,7 +241,21 @@ def default_context_plan(action: str, base: dict) -> dict:
     plan = sel().plan({}, base)
     plan["reasons"] = [f"기본 결정 {action}(필수 상태를 몰라 규칙이 정해지지 않음, BD-76)"]
     return plan
-PROMPT_SELECTORS = {c.version: c for c in (FixedPrompt(), AdaptivePrompt())}
+class AdaptivePrompt2(AdaptivePrompt):
+    """prompt-adaptive-2 = prompt-adaptive-1 + BD-91(BD-88 을 프롬프트에도): 품질 상태를 몰라 품질 우선 분기를 정할 수 없으면
+    (아는 값으로 이미 품질 우선이거나 retry_pressure=HIGH 면 정해진 것) 압력 · 지연으로 바꾸지 않고 목적의 기본 결정
+    FULL_INSTRUCTION(= 고정 프롬프트 계획, BD-81)을 낸다. 품질을 알면 prompt-adaptive-1 과 같다."""
+    version = "prompt-adaptive-2"
+
+    def plan(self, state: dict) -> dict:
+        if _quality_undecided(state) and state.get("retry_pressure") != "HIGH":
+            unknown = [k for k in ("answer_reliability", "correction_rate") if state.get(k) is None]
+            return {"version": self.version, "plan": dict(FIXED_PROMPT),
+                    "reasons": [f"기본 결정 FULL_INSTRUCTION(품질 상태 모름: {', '.join(unknown)} -- BD-88 · BD-91)"]}
+        return super().plan(state)
+
+
+PROMPT_SELECTORS = {c.version: c for c in (FixedPrompt(), AdaptivePrompt(), AdaptivePrompt2())}
 
 
 def replay(policy_record: dict) -> dict:

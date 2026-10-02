@@ -1390,6 +1390,32 @@ class Harness(unittest.TestCase):
         self.assertIn("S1 retrievals", md)
         self.assertIn("압력 HIGH 계획으로 돈 실행", md)
 
+    def test_BD91_prompt_quality_unknown_means_full_instruction(self):
+        """BD-91 · CMD-M13: 품질 상태를 모르면 압력이 HIGH 여도 concise · reasoning low 로 바꾸지 않고 FULL_INSTRUCTION(고정)."""
+        from ms.eval import Lane
+        from ms.policy import AdaptivePrompt2, FIXED_PROMPT
+        base = {k: None for k in U.STATES}
+        high = dict(base, token_budget_pressure="HIGH", latency_pressure="HIGH")
+        for st in (high, dict(high, answer_reliability="HIGH"), dict(high, correction_rate="LOW")):
+            out = AdaptivePrompt2().plan(st)
+            self.assertEqual(out["plan"], FIXED_PROMPT, st)
+            self.assertIn("FULL_INSTRUCTION", out["reasons"][0])
+        old = AdaptivePrompt().plan(high)
+        self.assertEqual(old["plan"]["instruction_mode"], "concise")                 # 대조: 옛 판본은 모름을 지나쳤다
+        known = dict(high, answer_reliability="HIGH", correction_rate="LOW")
+        self.assertEqual(AdaptivePrompt2().plan(known)["plan"], AdaptivePrompt().plan(known)["plan"])
+        for st in (dict(high, answer_reliability="LOW"), dict(high, retry_pressure="HIGH")):   # 아는 값으로 정해지는 분기
+            self.assertEqual(AdaptivePrompt2().plan(st)["plan"], AdaptivePrompt().plan(st)["plan"])
+        tf = json.load(open(os.path.join(ROOT, "eval", "tasks", "datacenter.json"), encoding="utf-8"))
+        tf["budgets"] = {"token_budget": 10, "context_budget": 10, "latency_budget_ms": 1e9}
+        lane = Lane("F", 0, {"openai": "sim-openai", "claude": "sim-claude"}, tf)
+        rows = [lane.run_task(t, log=lambda *a: None) for t in tf["tasks"][:4]]
+        self.assertTrue(all(r["instruction_mode"] == "full" for r in rows))          # 세션 초반 품질 모름 -> concise 아님
+        self.assertTrue(any("FULL_INSTRUCTION" in x for r in rows for x in r["prompt_plan"]))
+        self.assertTrue(replay({"state": high, "context_policy": FixedContext().plan(high, BASE_CONTEXT),
+                                "prompt_policy": AdaptivePrompt2().plan(high), "provider_policy": {"version": "x"},
+                                "inputs": {"base_context": BASE_CONTEXT, "default_provider": None}})["ok"])
+
     def test_operating_point_under_high_pressure(self):
         """S4 가 실제로 세는지 + BD-88: 예산을 아주 작게 해 압력 HIGH 로 만든다. 품질 상태를 모르는 실행은 KEEP(기본 결정),
         품질을 알면 판본대로 줄인다. G 는 -4 로 돌고 DROP · DEFER 를 안 한다."""

@@ -31,7 +31,7 @@ import time
 
 from . import predicate
 from .cli import clock_for, load
-from .policy import AdaptiveContext3, AdaptiveContext4, AdaptiveContext4c, AdaptivePrompt, FixedContext, FixedPrompt
+from .policy import AdaptiveContext3, AdaptiveContext4, AdaptiveContext4c, AdaptivePrompt2, FixedContext, FixedPrompt
 from . import usage_model as U
 from .providers import make_provider
 from .runtime import Runtime
@@ -108,7 +108,7 @@ class Lane:
             rt = Runtime(world, reg, {self.pname: self.provider}, grants=tf.get("grants", ()),
                          context_selector=CONTEXT[self.cmode](),
                          state_reader=self.reader,
-                         prompt_selector=AdaptivePrompt() if self.pmode == "adaptive" else FixedPrompt(),
+                         prompt_selector=AdaptivePrompt2() if self.pmode == "adaptive" else FixedPrompt(),   # BD-91
                          base_context=tf.get("base_context"), max_rounds=tf.get("max_rounds", 4),
                          usage_manager=self.usage, prices=tf.get("prices"), prompt_layout=self.layout)
             if not self.opened:
