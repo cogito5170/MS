@@ -35,6 +35,7 @@ class OpenAIProvider(LLMProvider):
                 "output_schema": "native (text.format json_schema, strict)",
                 "reasoning": "model-dependent (reasoning.effort; non-reasoning models reject it)",
                 "cached_tokens": "reported (input_tokens_details.cached_tokens, included in input_tokens)",
+                "prefix_cache": "automatic by provider (no breakpoint parameter used here; threshold unverified)",
                 "ttft": "stream only", "stream": True, "native_tools": True, "cost": "not reported (price table)"}
 
     def to_provider_request(self, req):

@@ -35,6 +35,8 @@ class ClaudeCLIProvider(LLMProvider):
                 "output_schema": "prompt only", "reasoning": "--effort low/medium/high; 'off' unsupported",
                 "cached_tokens": "reported (Claude usage shape)", "ttft": "not available (no stream)",
                 "stream": False, "native_tools": False, "cost": "reported (total_cost_usd)",
+                "prefix_cache": "whole-prompt only -- the CLI places the breakpoint; same system + different user "
+                                "text reads 0 (measured 2026-10-02)",
                 "not_equivalent_to_api": "Claude Code harness adds system/context tokens"}
 
     def to_provider_request(self, req):

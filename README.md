@@ -189,6 +189,7 @@ python3 -m ms eval --tasks eval/tasks/datacenter.json \
 | `claude-cli` B · D · F, 반복 1 (2026-10-01, 약 $0.29, 3 분) — [`eval/results/claude-cli_배선_2026-10-01.md`](eval/results/claude-cli_배선_2026-10-01.md) | 성공 6/7 셋 다 같음 · 금지 실행 0 · B→D 의 모든 차는 구간이 0 을 걸침(**모른다**) · D→F 는 입력 −227(구간 −295~−136) 인데 출력 +171 · 지연 +1.5 s · 비용 +$0.0008 | **사전등록 밖이다**(CLI 하네스가 붙는다, 반복 1). 방향은 선행조사(arXiv:2609.32961)가 말한 "토큰이 줄어도 느려질 수 있다" 와 같다. **사소한 설명을 못 죽였다**: 적응 프롬프트의 concise 지시가 원래 지시의 "rationale 한 줄" 을 빠뜨렸다(prompt-text-1) — 아래 재측정에서 고친 뒤 다시 쟀다 |
 | `claude-cli` 재측정 B · D · F, 반복 2 (concise 에 "rationale 한 줄" 을 되돌린 뒤) — [`eval/results/claude-cli_재측정_2026-10-01.md`](eval/results/claude-cli_재측정_2026-10-01.md) · 읽기는 [`eval/PREREG_간결지시_재측정.md`](eval/PREREG_간결지시_재측정.md) | D→F 출력 +14(구간 0 걸침, 앞은 +171) · F 의 rationale 68.6자 ≈ D 73.0자 · D→F 입력 +270(구간 0 걸침) · 비용 "늘었다" | 앞의 출력 증가는 **지시문 결함 때문**이었다(돌리기 전에 적은 읽기대로). 입력 감소가 사라진 것은 반복 1 에서 concise 아래 못 읽는 답(A0) 한 번 -> `answer_reliability=LOW` -> 품질 우선으로 바뀌어 프롬프트가 길어졌기 때문이다(규칙대로, 다만 세션 초반에 민감하다). **비용 차는 캐시 상태의 차다** — 앞 측정이 쓴 캐시를 B · D 가 읽었고 F 는 지시문이 바뀌어 못 읽었다 |
 | `claude-cli` 재측정 2: 보호 장치 완화(usage-model-2) + 순서 섞음, B · D · F, 반복 2 — [`eval/results/claude-cli_재측정2_2026-10-01.md`](eval/results/claude-cli_재측정2_2026-10-01.md) · 읽기 [`eval/PREREG_보호장치_재측정.md`](eval/PREREG_보호장치_재측정.md) | F 의 두 세션 모두 A0 한 번 -> 품질 우선으로 **안 바뀜** · D→F 전체 입력 모른다 / 캐시 안 된 입력 +822(늘었다) · 비용 +$0.0036/과업 | **완화가 들었다.** 두 입력 지표가 갈려 입력은 판정 안 함(사전등록 고침 1-2). F 가 비싼 까닭은 **상태에 따라 지시문이 바뀌어 provider 캐시가 깨지기 때문**(미리 적어 둔 구조적 치우침) — 줄인 토큰보다 캐시 손실이 클 수 있다. 새 가설 후보: concise 지시에서 A0 3/37 대 full 0/93(단측 Fisher 0.022, 사후 · 비독립이라 발견 아님) |
+| `claude-cli` 재측정 3: 캐시를 지키는 배치(prompt-text-3) + `--fresh`, B · D · F, 반복 2 — [`eval/results/claude-cli_재측정3_2026-10-02.md`](eval/results/claude-cli_재측정3_2026-10-02.md) · 읽기 [`eval/PREREG_캐시배치_재측정.md`](eval/PREREG_캐시배치_재측정.md) | 캐시 읽기가 **모든 실행에서 0** · D→F 비용 +$0.00096(구간 0 걸침) · F 의 A0 0 · B→D 지연 +2.1 s(늘었다) | 탐침으로 가렸다: **claude -p 는 캐시 지점을 프롬프트 끝에만 둔다** — 시스템 글이 같아도 사용자 글이 다르면 읽기 0. 그래서 배치의 캐시 효과는 claude-cli 로 못 보고, 앞 측정들의 캐시 읽기는 **같은 과업을 되풀이한 인공물**이었다. 되풀이를 없애자 F 의 비용 불리가 사라졌다. Claude API 어댑터에 시스템 글 끝 캐시 지점을 넣었다(못 재봄). 네 측정 내내 같은 방향: **적응 맥락이 꺼냄을 늘리고(6 대 2~4) 느리다** — 후보 |
 | 과업 t6 | 세 칸 모두 실패 | 다 식힌 세계에서 Claude 가 팬 고장 srv05 에 티켓을 열었다. 과업은 "아무것도 하지 마라" 를 기대했다 — **과업 정의의 결함**이지 정책의 효과가 아니다 |
 | 비용 대조 | 일치 | 한 실행: 입력 2,140(거의 다 1 시간 캐시 쓰기, $4/MTok) + 출력 94($10/MTok) = $0.0095 ≈ CLI 보고 $0.009496 |
 
@@ -201,7 +202,7 @@ python3 -m ms ask ms/examples/datacenter.json --telemetry ms/examples/datacenter
 python3 -m ms ask ... --provider claude --model claude-opus-5-5 --stream     # ANTHROPIC_API_KEY
 python3 -m ms ask ... --provider openai --model <모형>                        # OPENAI_API_KEY (모형 기본값을 지어내지 않는다)
 python3 -m ms ask ... --provider sim-gemini                                   # 모의 -- 배선 확인
-python3 -m unittest tests.test_ms tests.test_runtime                          # 92 개
+python3 -m unittest tests.test_ms tests.test_runtime                          # 97 개
 ```
 
 ```python
@@ -225,8 +226,12 @@ rt.feedback(out["run_id"], user_correction=False)     # 사람의 고침도 텔�
   칸 순서를 섞거나 캐시 안 된 입력(`input_tokens − cached_input_tokens`)으로도 비교해야 한다.
 - 품질 상태(answer_reliability LOW · correction_rate HIGH)는 **표본 3 개 이상 · 사건 2 번 이상**일 때만 정해진다(usage-model-2).
   usage-model-1 은 실패 한 번으로 LOW 가 됐다.
-- **적응 프롬프트는 provider 캐시와 부딪친다.** 지시문이 상태에 따라 바뀌면 앞부분 캐시가 깨져, 줄인 입력보다 비싸질 수 있다(재측정 2).
-  캐시를 지키려면 바뀌는 부분을 프롬프트 **뒤쪽**에 두는 설계가 필요하다 — 아직 안 했다.
+- **프롬프트 배치는 기본이 stable_prefix(prompt-text-3)다.** 시스템 글은 모든 계획 · 상태에서 바이트가 같고, 계획이 바꾸는 것은
+  사용자 글(STATE 뒤)로 간다. 그 대가로 concise 지시는 적용하지 않는다(`unsupported` 에 적힌다). 예전 배치는 `--layout legacy`.
+- 캐시를 실제로 쓰려면 provider 가 **시스템 글 끝**에서 캐시해야 한다. Claude API 어댑터는 그 자리에 `cache_control` 을 둔다.
+  claude-cli 는 지점을 고를 수 없어 **완전히 같은 프롬프트만** 캐시에서 읽는다(실측). 평가에서 같은 과업을 되풀이하면 그것이
+  측정을 오염시키므로 `--fresh` 를 쓴다.
+- 적응 맥락은 지금까지 **꺼냄을 늘리고 느렸다**(네 측정 같은 방향, 독립 아님). 맥락을 줄이는 정책이 판 수를 늘리는 값을 같이 봐야 한다.
 - `context_tokens` · `retrieved_tokens` 는 **추정**이다(입력 토큰 × 글자 비율). claude-cli 처럼 provider 가 우리 프롬프트 밖의 토큰
   (하네스 ~1,100)을 더하면 맥락 몫을 **부풀린다.** 그 상태(context_pressure)는 그만큼 과하게 HIGH 가 된다.
 - 상태의 문턱 · 정책의 규칙은 손으로 둔 것이다. 바꾸면 판본을 올린다 — 재현이 판본을 본다.

@@ -81,7 +81,10 @@ class SimulatedTransport:
         if self.dialect == "openai":
             return body.get("instructions", ""), body["input"][0]["content"]
         if self.dialect == "claude":
-            return body.get("system", ""), body["messages"][0]["content"]
+            sy = body.get("system", "")
+            if isinstance(sy, list):
+                sy = "".join(b.get("text", "") for b in sy)
+            return sy, body["messages"][0]["content"]
         return body["systemInstruction"]["parts"][0]["text"], body["contents"][0]["parts"][0]["text"]
 
     def _answer(self, body):

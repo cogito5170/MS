@@ -568,7 +568,7 @@ class CacheStableLayout(unittest.TestCase):
                 p = make_provider("claude", "claude-opus-5-5", api_key="k", transport=Rec(RAW_CLAUDE))
                 pipe = Pipeline(m, reg, p, pol, prompt_plan=sel.plan(st)["plan"], prompt_layout=layout)
                 pipe.run("t", spec["queries"], max_rounds=1)
-                out.add(p.transport.seen[0]["system"])
+                out.add(json.dumps(p.transport.seen[0]["system"], ensure_ascii=False))
         return out
 
     def test_system_is_identical_across_plans(self):
@@ -576,6 +576,13 @@ class CacheStableLayout(unittest.TestCase):
 
     def test_legacy_layout_varies(self):                         # 대조 -- 이 시험이 헛돌지 않는다
         self.assertGreater(len(self._systems("legacy")), 1)
+
+    def test_claude_breakpoint_at_end_of_system(self):
+        p = make_provider("claude", "claude-opus-5-5", api_key="k", transport=Rec(RAW_CLAUDE))
+        _, _, b, _ = p.to_provider_request(CanonicalRequest("claude-opus-5-5", P(preamble="run 1")))
+        self.assertEqual(b["system"][-1]["cache_control"], {"type": "ephemeral"})
+        self.assertNotIn("run 1", json.dumps(b["system"], ensure_ascii=False))     # 실행마다 바뀌는 것은 지점 뒤에
+        self.assertNotIn("cache_control", json.dumps(b["messages"]))
 
     def test_plan_directives_go_after_state(self):
         spec, m, reg, pol, *_ = world()

@@ -43,6 +43,7 @@ class GeminiProvider(LLMProvider):
                 "reasoning": "thinkingLevel low/high on gemini-3*; otherwise unsupported" if _gemini3(self.model)
                 else "unsupported for this model (thinkingBudget is a token count, not mapped)",
                 "cached_tokens": "reported (cachedContentTokenCount, included in promptTokenCount)",
+                "prefix_cache": "implicit by provider if any (not configured here; unverified)",
                 "ttft": "stream only", "stream": True, "native_tools": True, "cost": "not reported (price table)"}
 
     def to_provider_request(self, req):

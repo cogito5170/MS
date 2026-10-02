@@ -57,12 +57,17 @@ class ClaudeProvider(LLMProvider):
                 "output_schema": "native (output_config.format json_schema)",
                 "reasoning": eff,
                 "cached_tokens": "reported separately (cache_read/creation), summed into input_tokens",
+                "prefix_cache": "explicit breakpoint at end of system text (min 512 tokens on Opus/Sonnet 5.5)",
                 "ttft": "stream only", "stream": True, "native_tools": True, "cost": "not reported (price table)"}
 
     def to_provider_request(self, req):
         p, inf, unsupported = req.prompt, req.inference or {}, []
         model = req.model or self.model
-        body = {"model": model, "max_tokens": int(inf.get("max_output_tokens") or 16000), "system": p.system_text(),
+        # 캐시 지점은 시스템 글 **끝**에 둔다. Claude 의 캐시는 지점에서만 항목을 만들고 앞부분 일치로 읽는다 -- 지점이
+        # 메시지 끝에만 있으면 사용자 글이 바뀔 때마다 전부 새로 쓴다(claude -p 에서 실측: 같은 시스템 · 다른 사용자 글 -> 읽기 0).
+        # 모형별 최소 길이(Opus 5.5 · Sonnet 5.5: 512 토큰)보다 짧으면 조용히 안 걸린다.
+        body = {"model": model, "max_tokens": int(inf.get("max_output_tokens") or 16000),
+                "system": [{"type": "text", "text": p.system_text(), "cache_control": {"type": "ephemeral"}}],
                 "messages": [{"role": "user", "content": p.user_text()}]}
         oc = {}
         r = inf.get("reasoning")
