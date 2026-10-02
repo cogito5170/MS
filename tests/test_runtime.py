@@ -1782,10 +1782,9 @@ class GuardShadowWiring(unittest.TestCase):
         self.assertEqual((again[0]["verdict"], again[0]["rule"]), ("DENY", "A8"))
 
 
-class ExecutorShadowWiring(unittest.TestCase):
-    """CMD-M20 · M21: DC 길의 도구 호출 바로 앞에서 실행기를 shadow 로 부른다. ActionCommand = Arbiter 가 ALLOW 한 의도의 재료 +
-    결정 id + issued_at(ms) (BD-111). Guard 결과는 옆에 기록만.
-    처리기를 부르지 않고 L0 에도 적지 않는다 -- 실행은 지금 길 그대로다."""
+class ExecutorWiring(unittest.TestCase):
+    """CMD-M20 · M21 · M22: DC 길의 도구 실행은 실행기가 한다(mode="execute"). ActionCommand = Arbiter 가 ALLOW 한 의도의 재료 +
+    결정 id + issued_at(ms) (BD-111). Guard 결과는 옆에 기록만. snapshot 길은 지금처럼 tool.run · tool.*."""
 
     def setUp(self):
         self.G = guard_pkg()
@@ -1827,49 +1826,94 @@ class ExecutorShadowWiring(unittest.TestCase):
         self.assertEqual((cmd.id, cmd.decision_ref), (w["action_ref"], out["decision"]["id"]))
         self.assertEqual(cmd.issued_at, rt.clock() * 1000)                     # ms (PC19 G4) -- 이 세계의 시계는 멈춰 있다
         self.assertEqual((x["execution"]["mode"], x["execution"]["executed"], x["execution"]["refused"]),
-                         ("shadow", False, None))
+                         ("execute", True, None))
+        self.assertNotIn("fallback", x)
         self.assertEqual([l["kind"] for l in lines], ["decision", "intent", "guard", "execution", "run"])
         self.assertEqual(lines[3]["decision_ref"], out["decision"]["id"])
         self.assertEqual(x["material_vs_guard"], "같음")                      # 둘 다 ALLOW -> guard command_material 과 같은 재료
         from action.forms import ActionIntent
-        from ms.executor_shadow import material
+        from ms.dispatch import material
         it = ActionIntent.from_dict(out["intents"][0]["intent"])
         g = out["guards"][0]["guard"]
         self.assertEqual(rt.dispatch._vs_guard(it, material(it), g), "같음")
         self.assertEqual(rt.dispatch._vs_guard(it, dict(material(it), args={"level": 3}), g), "다름")   # 대조가 헛돌지 않는다
         self.assertEqual(x["model"], rt.reg.model.version)                     # 명세는 ActionModel(도구 정의 -> ActionSpec)
 
-    def test_shadow_calls_no_handler_and_writes_no_l0(self):
-        """shadow 는 처리기 0 번 · L0 사건 0 개: 실제 도구 호출은 한 번뿐이고, L0 사건은 실행기를 뺀 실행과 같다."""
+    def _l0(self, off=False, llm=None, handler=None, **kw):
+        """(handle 결과, L0 사건 종류 목록). off 면 실행기를 끈 런타임(= 바꾸기 전의 tool.* 길)."""
+        from unittest import mock
+        tele = os.environ.get("TELEMETRY_REPO", os.path.join(ROOT, "..", "Telemetry"))
+        if not os.path.isdir(os.path.join(tele, "telemetry")):
+            self.skipTest("옆에 Telemetry 가 없다(TELEMETRY_REPO)")
+        if tele not in sys.path:
+            sys.path.append(tele)
+        from telemetry import MemorySink
+        sink = MemorySink()
+        with mock.patch.dict(sys.modules, {"action.executor": None} if off else {}):
+            spec, rt = self._rt(llm, l0_sink=sink, **kw)
+        self.assertEqual(rt.dispatch is None, off)
+        if handler is not None:
+            rt.reg.get("throttle").handler = handler              # 런타임을 지은 뒤에 붙여도 실행기가 따른다
+        out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        return out, sink.events
+
+    def test_one_run_one_event_kind(self):
+        """끝난 기준(BD-97 Q3): DC 길 실행은 L0 에 action.dispatch / action.result 한 쌍만 -- tool.* 은 0. 처리기는 한 번(실제
+        실행), 관측 · 결정 id 는 바꾸기 전(tool.* 길)과 같다. 사건은 Telemetry 검사를 지나고 action_ref = command_id."""
+        import itertools
         from unittest import mock
         from ms.tools import ToolSpec
-        tele = os.environ.get("TELEMETRY_REPO", os.path.join(ROOT, "..", "Telemetry"))
         calls, real_run = [], ToolSpec.run
 
         def run(tool, target, a):
             calls.append(tool.name)
             return real_run(tool, target, a)
+        with mock.patch("ms.telemetry._ids", itertools.count(1)), mock.patch.object(ToolSpec, "run", run):
+            on, ev_on = self._l0()
+        with mock.patch("ms.telemetry._ids", itertools.count(1)):
+            off, ev_off = self._l0(off=True)
+        from telemetry import check
+        types_on, types_off = [e["type"] for e in ev_on], [e["type"] for e in ev_off]
+        self.assertEqual(calls, ["throttle"])
+        self.assertEqual((types_on.count("action.dispatch"), types_on.count("action.result")), (1, 1))
+        self.assertFalse([t for t in types_on if t.startswith("tool.")])
+        self.assertEqual((types_off.count("tool.start"), types_off.count("tool.end")), (1, 1))     # 대조: 바꾸기 전
+        self.assertEqual([t for t in types_on if not t.startswith("action.")],
+                         [t for t in types_off if not t.startswith("tool.")])                    # 나머지 사건은 같다
+        self.assertEqual([check(e) for e in ev_on], [[]] * len(ev_on))
+        d = next(e for e in ev_on if e["type"] == "action.dispatch")["data"]
+        (x,) = on["executions"]
+        self.assertEqual((d["action_ref"], d["decision_ref"]), (x["command"]["command_id"], on["decision"]["id"]))
+        self.assertEqual((x["execution"]["mode"], x["execution"]["executed"]), ("execute", True))
+        self.assertEqual(on["decision"]["id"], off["decision"]["id"])
+        self.assertEqual(on["result"]["ingested"], off["result"]["ingested"])                  # 관측 ingest 그대로
 
-        def once(off):
-            sink = None
-            if os.path.isdir(os.path.join(tele, "telemetry")):
-                if tele not in sys.path:
-                    sys.path.append(tele)
-                from telemetry import MemorySink
-                sink = MemorySink()
-            with mock.patch.dict(sys.modules, {"action.executor": None} if off else {}):
-                spec, rt = self._rt(l0_sink=sink)
-            self.assertEqual(rt.dispatch is None, off)
-            with mock.patch.object(ToolSpec, "run", run):
-                out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
-            return out, [e["type"] for e in sink.events] if sink is not None else None
-        on, ev_on = once(False)
-        self.assertEqual(calls, ["throttle"])                                 # 실행기는 처리기를 부르지 않았다
-        off, ev_off = once(True)
-        self.assertEqual(off["executions"], [])
-        self.assertEqual(ev_on, ev_off)                                       # L0 그대로(Telemetry 가 있을 때)
-        if ev_on is not None:
-            self.assertFalse([t for t in ev_on if t.startswith("action.")])
+    def test_refused_by_the_executor_falls_back_without_losing_the_run(self):
+        """실행기가 거절하면(처리기 없음) 지금 길로 실행한다 -- 실행을 잃지 않고, 까닭은 원장 줄의 fallback 에 남는다."""
+        spec, rt = self._rt()
+        rt.dispatch.handlers = {}
+        out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        (x,) = out["executions"]
+        self.assertEqual(x["fallback"], "실행기 거절 NO_HANDLER")
+        self.assertEqual(out["result"]["executed"], [{"tool": "throttle", "target": "srv07"}])
+        self.assertTrue(out["result"]["ingested"])
+
+    def test_tool_exception_becomes_the_same_observation(self):
+        """처리기가 던지면: 관측은 지금과 같은 tool_error(메시지까지), L0 action.result 에는 예외 종류 이름만."""
+        import itertools
+        from unittest import mock
+
+        def boom(target, args):
+            raise RuntimeError("팬이 멈췄다")
+        with mock.patch("ms.telemetry._ids", itertools.count(1)):
+            on, ev_on = self._l0(handler=boom)
+        with mock.patch("ms.telemetry._ids", itertools.count(1)):
+            off, ev_off = self._l0(off=True, handler=boom)
+        self.assertEqual(on["result"]["ingested"], off["result"]["ingested"])
+        self.assertEqual(on["result"]["ingested"][0]["signal"], "tool_error")
+        r = next(e for e in ev_on if e["type"] == "action.result")["data"]
+        self.assertEqual((r["is_error"], r["exception"]), (True, "RuntimeError"))
+        self.assertNotIn("팬이 멈췄다", json.dumps(ev_on, ensure_ascii=False))                # 메시지는 L0 에 안 간다
 
     def test_command_comes_from_the_arbiter_even_when_guard_blocks(self):
         """BD-111: E3 전까지 명령 재료는 실행을 정하는 Arbiter 의 ALLOW 의도에서 바로 온다. Guard 가 막아도(D) 명령이 있고,
@@ -1895,9 +1939,9 @@ class ExecutorShadowWiring(unittest.TestCase):
         self.assertEqual([x["round"] for x in out["executions"]], [2])
         it = next(i for i in out["intents"] if i["round"] == 1)["intent"]
         from action.forms import ActionIntent
-        x = rt.dispatch.shadow(ActionIntent.from_dict(it), "DENY", None, out["decision"]["id"], 1.0)
-        self.assertEqual((x["command"], x["execution"]), (None, None))
-        self.assertIn("Arbiter DENY", x["error"])
+        cmd, why = rt.dispatch.command(ActionIntent.from_dict(it), "DENY", out["decision"]["id"], 1.0)
+        self.assertIsNone(cmd)
+        self.assertIn("Arbiter DENY", why)
 
     def test_without_guard_the_executor_still_runs(self):
         """guard 는 선택이다: 없으면 Guard 줄이 없고, 명령 · would_dispatch 는 그대로 있다(재료가 Arbiter 쪽이라)."""

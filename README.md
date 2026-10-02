@@ -184,17 +184,19 @@ provider 계획 · 중재 결정 · 재현 입력은 `DecisionRecord` 에 있고
 - 어댑터 · 재료 오류는 DENY(E) 로 남긴다.
 - 대조표: `python3 eval/guard_contrast.py`. 시험은 `MS_GUARD_PATH`(기본 `../guard`)에 guard 가 있을 때만 돈다.
 
-**실행기를 DC 길에 shadow 로 붙인다 (`ms/executor_shadow.py`, CMD-M20 · M21 · BD-108 · BD-111).** DC 길일 때만 돈다(guard 는 선택이고 대조에만 쓴다).
-- 도구 호출 **바로 앞**에서 ActionCommand 를 짓는다. 재료는 셋이다.
+**DC 길의 도구 실행은 실행기가 한다 (`ms/dispatch.py`, CMD-M20 shadow → M21 → M22 execute · BD-108 (4) · BD-111).** 한 실행은 한 사건이다(BD-97 Q3).
+- DC 길(결정 문맥 id 가 있는 길)에서 도구를 실행하면 `action.executor.execute(cmd, ActionModel, {이름: ms_handler(tool.run)}, recorder, mode="execute")` 로 한다.
+  그 실행(run)의 L0 에는 `action.dispatch` / `action.result` 한 쌍만 남는다(`action_ref` = command_id, 인자는 `args_sig` 로). `tool.*` 은 없다.
+- **snapshot 길은 그대로** `tool.run` · `tool.start` / `tool.end` 다.
+- ActionCommand 의 재료는 셋이다.
   - **Arbiter 가 ALLOW 한 의도**의 `intent_id · action · target · args`. E3(Guard enforce) 전까지는 실행을 정하는 쪽의 판정에서 짓는다(BD-111)
   - `before_execute` 가 Pipeline 에 돌려준 결정 id
   - `issued_at` = 시계 × 1000(ms)
-- 그 명령으로 `action.executor.execute(…, mode="shadow")` 를 부른다. 처리기를 부르지 않고 L0 에도 적지 않는다. 실행은 지금 길(`tool.run` · `tool.*`) 그대로다.
-- ActionModel 은 `ToolRegistry.model` 이다(아래 "도구 명세").
+- 관측: 처리기가 돌려준 관측을 지금처럼 ingest 한다. 처리기가 던지면 지금과 같은 `tool_error` 관측(메시지까지)이고, L0 에는 예외 종류 이름만 간다.
+- 명령을 지을 수 없거나(의도 없음 등) 실행기가 거절하면 지금 길로 실행한다. 실행을 잃지 않고, 까닭은 원장 줄의 `fallback` 에 남는다.
 - Guard 결과는 옆에 기록만 한다. 둘 다 ALLOW 면 재료가 guard `command_material` 과 같은지 `material_vs_guard` 에 적는다.
-  Arbiter 가 막은 판에는 명령이 없다.
-- 원장에는 `{"kind": "execution", "decision_ref", "round", "model", "command", "execution"}` 줄로 남고, `handle()` 의 `executions` 에도 담긴다.
-- 대조표: `python3 eval/executor_contrast.py`. `would_dispatch`(도구 · 겨냥 · 결정 id)를 실제 실행과 견준다.
+- 원장에는 `{"kind": "execution", "decision_ref", "round", "model", "command", "execution"[, "fallback"]}` 줄로 남고, `handle()` 의 `executions` 에도 담긴다.
+- 대조: `python3 eval/sensor_contrast.py`(바꾸기 전후의 L0 를 Sensor 에 넣어 `execution_health` 등을 견준다) · `python3 eval/executor_contrast.py`.
 
 **도구 명세 · 술어 · 인자 검사는 action 의 한 벌이다 (BD-108 · BD-111).** action(`action-contract`)은 **필수 의존**이고 pyproject 에
 커밋 sha 로 고정한다(guard · health 와 같은 sha).

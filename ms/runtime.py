@@ -38,7 +38,7 @@ from . import usage_model as U
 from .arbiter import DENY, Arbiter
 from .cr import VERSION as CR_VERSION, ContextRuntime
 from .pipeline import Pipeline
-from . import executor_shadow, guard_shadow, intent, l0
+from . import dispatch as D, guard_shadow, intent, l0
 from .decision_record import DecisionRecord
 from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt, default_context_plan, undecided
 from .run_telemetry import RunRecord, cost_of
@@ -83,7 +83,7 @@ class Runtime:
         U.install(self.um)
         self.arbiter = Arbiter(registry, grants, clock=self.clock)
         self.guard = guard_shadow.Shadow(registry, grants) if guard_shadow.available() else None   # shadow(CMD-M17)
-        self.dispatch = executor_shadow.Dispatch(registry) if executor_shadow.available() else None   # 실행기 shadow(CMD-M20 · M21)
+        self.dispatch = D.Dispatch(registry) if D.available() else None   # DC 길 실행기(CMD-M20 shadow → M22 execute)
         self.ctx_sel = context_selector or FixedContext()
         self.prompt_sel = prompt_selector or FixedPrompt()
         default = next(iter(self.providers)) if self.providers else None
@@ -94,7 +94,7 @@ class Runtime:
         self.decisions: dict = {}
         self.intents: dict = {}         # 결정 id -> ActionIntent 기록(shadow, CMD-M15). 결정 기록 밖에 둔다
         self.guards: dict = {}          # 결정 id -> GuardResult 기록(shadow, CMD-M17). 결정 기록 밖에 둔다
-        self.executions: dict = {}      # 결정 id -> 실행기 shadow 기록(CMD-M20). 결정 기록 밖에 둔다
+        self.executions: dict = {}      # 결정 id -> 실행기 기록(CMD-M20 · M22). 결정 기록 밖에 둔다
         self.state_reader = state_reader
         self.l0_ledger, self.l0_sink = l0_ledger, l0_sink      # L0 Telemetry(선택 의존). 둘 다 없으면 안 낸다
         if (l0_ledger or l0_sink) and not l0.available():
@@ -143,9 +143,11 @@ class Runtime:
             return pre[-1].id
 
         def dispatch(rnd, p, decision_ref):
-            """도구 호출 바로 앞: 실행기가 이 명령을 무엇으로 내보낼지(shadow). 실행은 지금 길 그대로다."""
+            """도구 호출 자리(DC 길): 실행기로 실행하고 관측을 돌려준다. L0 에는 action.* 한 쌍만(tool.* 없음)."""
             it, verdict, g = by_round.get(rnd, (None, None, None))
-            executions.append({"round": rnd, **self.dispatch.shadow(it, verdict, g, decision_ref, self.clock() * 1000)})
+            entry, obs = self.dispatch.run(it, verdict, g, decision_ref, self.clock() * 1000, l0rec)
+            executions.append({"round": rnd, **entry})
+            return obs
         pipe = Pipeline(self.m, self.reg, provider, None, self.arbiter,
                         model=choice.get("model"), stream=bool(request.get("stream")),
                         tool_mode=request.get("tool_mode", "text"), preamble=request.get("preamble", ""),
@@ -153,7 +155,7 @@ class Runtime:
                         provider_label=choice["provider"],
                         before_execute=before_execute,
                         after_decide=decided if intent.dc_id(source) and (self.guard or self.dispatch) else None,
-                        dispatch_shadow=dispatch if self.dispatch and intent.dc_id(source) else None)
+                        dispatch=dispatch if self.dispatch and intent.dc_id(source) else None)
         res = pipe.run(request["task"], request.get("queries", ()), max_rounds=request.get("max_rounds", self.max_rounds),
                        supplied=supplied)
         total_ms = (self.wall() - t0) * 1000

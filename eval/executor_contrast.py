@@ -31,7 +31,7 @@ for env, name in (("MS_ACTION_PATH", "action"), ("MS_GUARD_PATH", "guard")):
         sys.path.append(p)               # 뒤에 -- 옆 저장소의 tests 패키지가 MS 의 tests 를 가리지 않게
 
 import ms.runtime as R  # noqa: E402
-from ms import executor_shadow, intent  # noqa: E402
+from ms import dispatch, intent  # noqa: E402
 
 
 def _collect(run) -> list:
@@ -109,7 +109,7 @@ def sim_rows() -> list:
 
 
 def main(argv) -> int:
-    if not executor_shadow.available():
+    if not dispatch.available():
         raise SystemExit("action · guard 를 못 읽는다 -- MS_ACTION_PATH · MS_GUARD_PATH")
     t = tests_rows()
     rep = {"tests": _tally(t), "tests_real_dc": _tally([r for r in t if r["real_dc"]]),

@@ -36,6 +36,11 @@ from .telemetry import Telemetry
 from .tools import RETRIEVE
 
 
+def tool_error(target, e) -> dict:
+    """도구가 던진 예외 -> 관측 하나(메시지까지). 실행기 길도 같은 것을 쓴다(Execution.raised)."""
+    return {"entity": target, "signal": "tool_error", "value": f"{type(e).__name__}: {e}"}
+
+
 @dataclass
 class RunResult:
     rounds: list = field(default_factory=list)
@@ -58,13 +63,13 @@ class Pipeline:
                  model: "str | None" = None, stream: bool = False, tool_mode: str = "text",
                  prompt_layout: "str | None" = None, preamble: str = "", cr: "ContextRuntime | None" = None,
                  recorder=None, provider_label: "str | None" = None, before_execute=None,
-                 after_decide=None, dispatch_shadow=None):
+                 after_decide=None, dispatch=None):
         self.m, self.reg = manager, registry
         self.rec = recorder or NullRecorder()      # L0 Telemetry -- 무슨 일이 일어났나만(ms/l0.py)
         self.provider_label = provider_label       # L0 에 적을 provider 이름(런타임이 고른 이름 -- 모의면 sim-*)
         self.before_execute = before_execute       # 도구 실행 직전에 RunResult 로 불린다 -- 결정 기록을 실행 전에 짓는 자리(PC-19 G1)
         self.after_decide = after_decide           # 판마다 Arbiter 판정 직후(실행 전)에 (판, 제안, 맥락, 판정) -- Guard shadow 의 자리(CMD-M17)
-        self.dispatch_shadow = dispatch_shadow     # 도구 호출 바로 앞에서 (판, 제안, 결정 id) -- 실행기 shadow 의 자리(CMD-M20)
+        self.dispatch = dispatch                   # (판, 제안, 결정 id) -> 관측 목록 | None. 있으면 실행기가 실행한다(CMD-M22, DC 길)
         self.provider = llm if isinstance(llm, LLMProvider) else CallableProvider(llm)
         self.llm = llm
         self.cr = cr or ContextRuntime(registry, policy, prompt_plan, prompt_layout, retrieve_max)
@@ -138,18 +143,18 @@ class Pipeline:
             decision_ref = None
             if self.before_execute is not None:         # 실행 직전: 이 판까지의 제안 · 판정은 다 정해졌다. 결정 id 를 돌려받는다(PC19 G1)
                 decision_ref = self.before_execute(res)
-            if self.dispatch_shadow is not None:
-                self.dispatch_shadow(i + 1, p, decision_ref)
             tool = self.reg.get(p.tool)                 # 여기 -- ALLOW 가지 안 -- 가 도구가 불리는 유일한 자리
-            with self.rec.tool(tool.name, {"target": p.target, "args": p.args}, call_index=len(res.calls) - 1) as t:
-                try:
-                    obs = tool.run(p.target, p.args)
-                except Exception as e:
-                    obs = [{"entity": p.target, "signal": "tool_error", "value": f"{type(e).__name__}: {e}"}]
-                    t.result(is_error=True, exception=type(e).__name__)
-                else:                                   # 도구가 tool_error 를 **보고**했나 -- 관측이다
-                    t.result(is_error=any(o.get("signal") == "tool_error" for o in obs),
-                             output=json.dumps(obs, ensure_ascii=False, default=str))
+            obs = self.dispatch(i + 1, p, decision_ref) if self.dispatch is not None else None
+            if obs is None:                             # 실행기 길이 아니다(snapshot 길) -- 지금처럼 L0 tool.* 로
+                with self.rec.tool(tool.name, {"target": p.target, "args": p.args}, call_index=len(res.calls) - 1) as t:
+                    try:
+                        obs = tool.run(p.target, p.args)
+                    except Exception as e:
+                        obs = [tool_error(p.target, e)]
+                        t.result(is_error=True, exception=type(e).__name__)
+                    else:                               # 도구가 tool_error 를 **보고**했나 -- 관측이다
+                        t.result(is_error=any(o.get("signal") == "tool_error" for o in obs),
+                                 output=json.dumps(obs, ensure_ascii=False, default=str))
             res.executed.append({"tool": tool.name, "target": p.target})
             for o in obs:
                 o = dict(o)
