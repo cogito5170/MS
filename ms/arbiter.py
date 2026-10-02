@@ -53,15 +53,22 @@ class Arbiter:
         self.clock = clock
         self._allowed: set = set()
 
-    def decide(self, proposal, ctx, manager) -> Decision:
+    def decide(self, proposal, ctx, manager, remember: bool = True) -> Decision:
+        """remember: ALLOW 하면 A8 기억에 더한다. 런타임(Pipeline)은 False 로 묻고 **실제로 실행한 뒤에** `remember` 를
+        부른다(CMD-M25) -- A8 의 뜻은 "이미 **한** 것을 되풀이하지 않음" 이라, Guard enforce 가 막아 실행되지 않은 ALLOW 는
+        기억하지 않는다. 혼자 부르는 쓰임(시험 · 대조)은 지금처럼 ALLOW 가 곧 기억이다."""
         try:
-            d = self._decide(proposal, ctx, manager)
+            d = self._decide(proposal, ctx, manager, remember)
         except Exception as e:                          # 닫힌 쪽으로
             d = Decision(DENY, "E", [f"중재자 예외: {type(e).__name__}: {e}"])
         self._log(proposal, d)
         return d
 
-    def _decide(self, p, ctx, m) -> Decision:
+    def remember(self, proposal, version) -> None:
+        """실행한 제안을 A8 기억에 더한다. version 은 판정 때 대상의 판(실행 전)이다."""
+        self._allowed.add((proposal.key(), version))
+
+    def _decide(self, p, ctx, m, remember: bool = True) -> Decision:
         if p.error:
             return Decision(DENY, "A0", [p.error])
         if p.tool == NONE:
@@ -100,7 +107,8 @@ class Arbiter:
         k = (p.key(), node.version)
         if k in self._allowed:
             return Decision(DENY, "A8", [f"같은 제안을 {p.target} 판 {node.version} 에서 이미 ALLOW 했다"])
-        self._allowed.add(k)
+        if remember:
+            self._allowed.add(k)
         return Decision(ALLOW, "0", [f"{tool.name}({tool.risk}) -> {p.target}"])
 
     def _log(self, p, d):

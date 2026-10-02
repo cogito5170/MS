@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import dataclass, field
 
@@ -76,6 +77,11 @@ class Pipeline:
         self.cr = cr or ContextRuntime(registry, policy, prompt_plan, prompt_layout, retrieve_max)
         self.policy, self.prompt_plan, self.retrieve_max = self.cr.policy, self.cr.prompt_plan, self.cr.retrieve_max
         self.arbiter = arbiter or Arbiter(registry, clock=manager.clock)
+        try:                                       # decide(remember=) · remember 를 아는 중재자인가(CMD-M25). 갈아 끼운 decide 도 본다
+            self._arbiter_remembers = (hasattr(self.arbiter, "remember")
+                                       and "remember" in inspect.signature(self.arbiter.decide).parameters)
+        except (TypeError, ValueError):
+            self._arbiter_remembers = False
         self.preamble = preamble
         self.model, self.stream, self.tool_mode = model, stream, tool_mode
 
@@ -122,7 +128,11 @@ class Pipeline:
             rnd["context"], rnd["prompt_chars"] = ctx.stats(), info["prompt_chars"]
             res.calls.append(info)
             p = proposal_from(resp)
-            d = self.arbiter.decide(p, ctx, self.m)
+            node = self.m.graph.nodes.get(p.target) if isinstance(p.target, str) else None
+            seen_version = node.version if node is not None else None      # A8 열쇠의 판 -- 판정 때(실행 전)의 것
+            remembers = self._arbiter_remembers                          # 꽂은 중재자가 A8 기억을 모르면 예전처럼 부른다
+            d = (self.arbiter.decide(p, ctx, self.m, remember=False) if remembers   # A8 기억은 실제로 실행한 뒤에만(CMD-M25)
+                 else self.arbiter.decide(p, ctx, self.m))
             rnd["proposal"], rnd["decision"] = p.to_dict(), d.to_dict()
             if self.after_decide is not None:
                 self.after_decide(i + 1, p, ctx, d)
@@ -164,6 +174,8 @@ class Pipeline:
                     else:                               # 도구가 tool_error 를 **보고**했나 -- 관측이다
                         t.result(is_error=any(o.get("signal") == "tool_error" for o in obs),
                                  output=json.dumps(obs, ensure_ascii=False, default=str))
+            if remembers:
+                self.arbiter.remember(p, seen_version)  # 실제로 실행했다 -- 이제 되풀이(A8)로 센다
             res.executed.append({"tool": ran_as[0], "target": ran_as[1]})
             for o in obs:
                 o = dict(o)

@@ -2267,6 +2267,18 @@ class EnforceWiring(unittest.TestCase):
         self.assertEqual(ran, [(None, {})])
         self.assertEqual(out["result"]["executed"], [{"tool": "open_ticket", "target": None}])
 
+    def test_a8_remembers_only_what_ran(self):
+        """CMD-M25: A8 은 "이미 한 것" 의 되풀이다. enforce 에서 Guard 가 막은 ALLOW 는 기억하지 않는다 -- 다음 요청에서 같은 제안이
+        A8 로 거절되지 않는다. shadow 에서 실제로 실행된 제안의 되풀이는 지금처럼 A8 이다(reboot_ack 은 묶이지 않아 판이 그대로다)."""
+        def twice(mode):
+            spec, rt = self._rt(ScriptedLLM([{"tool": "reboot", "target": "srv07", "rationale": "x"}] * 2),
+                                grants=("reboot",), mode=mode)
+            first, second = self._go(rt, spec), self._go(rt, spec)
+            return [(o["result"]["rounds"][0]["decision"]["verdict"], o["result"]["rounds"][0]["decision"]["rule"],
+                     bool(o["result"]["executed"])) for o in (first, second)]
+        self.assertEqual(twice("enforce"), [("ALLOW", "0", False), ("ALLOW", "0", False)])    # 막혔으니 한 적 없다
+        self.assertEqual(twice("shadow"), [("ALLOW", "0", True), ("DENY", "A8", False)])      # 대조: 한 것은 되풀이다
+
     def test_snapshot_path_never_runs_tools(self):
         sink = self._sink()
         spec, rt = self._rt(reader=False, sink=sink)
