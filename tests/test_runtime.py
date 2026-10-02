@@ -2120,12 +2120,19 @@ class VerifyWiring(unittest.TestCase):
         (closed,) = rt.close_windows()
         self.assertEqual((closed["record"]["result"], closed["record"]["reason"]), ("UNKNOWN", "NOT_USABLE"))
 
-    def test_tool_without_postcondition_is_no_spec(self):
+    def test_tool_without_postcondition_is_not_verified_at_all(self):
+        """CMD-M23 덧붙임: 사후조건 없는 행동은 verify 를 부르지 않는다 -- 호출 0 · 예외 0 · 기록 0. 창을 지어내지 않는다."""
+        from unittest import mock
         spec, rt, clock = self._rt(ScriptedLLM([{"tool": "reboot", "target": "srv07", "rationale": "x"}]),
                                    grants=("reboot",))
-        out = self._go(rt, spec)
-        rec = out["verifications"][0]["record"]
-        self.assertEqual((rec["result"], rec["reason"], rec["final"], rec["spec"]), ("UNKNOWN", "NO_SPEC", True, None))
+        with mock.patch.object(rt.verifier.h, "verify", side_effect=AssertionError("verify 를 불렀다")) as v:
+            out = self._go(rt, spec)
+            clock.t += 3600
+            self.assertEqual(rt.close_windows(), [])
+        self.assertEqual(v.call_count, 0)
+        self.assertTrue(out["executions"][0]["execution"]["executed"])           # 대조: 실행은 일어났다
+        self.assertEqual((out["verifications"], rt.verifier.pending), ([], []))
+        self.assertFalse([l for l in self._lines() if l["kind"] == "verification"])
 
     def test_outcome_is_not_used_to_judge(self):
         """실행기 결과가 오류(is_error)여도 효과가 관측되면 VERIFIED 다 -- "됐다/안 됐다" 는 관측일 뿐(BD-99)."""

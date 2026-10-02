@@ -202,7 +202,7 @@ provider 계획 · 중재 결정 · 재현 입력은 `DecisionRecord` 에 있고
 - 언제:
   - (a) 실행기가 실행한 명령의 관측을 상태 관리자에 넣은 **직후**
   - (b) 창이 닫힐 때(`issued_at + window_ms`). Runtime 이 요청마다 먼저 `close_windows()` 를 부르고, 바깥에서도 부를 수 있다. (a) 가 PENDING 이면 (b) 에서 한 번 더 판정한다(final).
-- 사후조건 · 창은 행동 명세(ActionSpec)에 있다. 도구 정의 JSON 의 `postcondition` · `window_ms` 가 `ActionSpec.from_tool` 로 간다. 없으면 NO_SPEC 다.
+- 사후조건 · 창은 행동 명세(ActionSpec)에 있다. 도구 정의 JSON 의 `postcondition` · `window_ms` 가 `ActionSpec.from_tool` 로 간다. **사후조건이 없는 행동은 verify 를 부르지 않는다**(창을 지어내지 않는다, CMD-M23 덧붙임) -- 기록도 없다.
   예시 세계(`ms/examples/datacenter.json`)에는 달지 않았다 -- F2b 세계(`eval/worlds/datacenter36.json`)가 그 파일에서 지어지는 사전등록 산출물이라서다. 시험의 대본 세계가 `throttle` 에 `throttled == true` · 60 s 를 단다.
 - 읽기:
   - `$target` 이 푸는 MS 세계의 실체 → 상태 관리자를 state-export `read` 꼴로 읽는 어댑터(`state_reads`): 값 · OBSERVED/DERIVED · FRESH/STALE(ttl) · 관측 시각 ms.

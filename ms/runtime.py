@@ -131,7 +131,8 @@ class Runtime:
             outcome = ActionOutcome.from_dict(ex["outcome"]) if ex.get("outcome") else None
             rec = self.verifier.after_execute(ActionCommand.from_dict(x["command"]), run_id, decision_ref, outcome,
                                               self.m, self.clock() * 1000)
-            out.append({"round": x["round"], "when": "after_execute", "record": rec})
+            if rec is not None:                       # 사후조건 없는 행동은 검증하지 않는다(기록도 없다)
+                out.append({"round": x["round"], "when": "after_execute", "record": rec})
         return out
 
     def handle(self, request: dict) -> dict:
