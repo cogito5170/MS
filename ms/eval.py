@@ -192,6 +192,7 @@ def _row(letter, rep, task, rec, dec, result, ok) -> dict:
             "instruction_mode": dec["prompt_policy"]["plan"]["instruction_mode"],
             "context_version": dec["context_policy"]["version"],
             "warmup": bool(task.get("warmup")), "stratum": task.get("stratum"), "pair": task.get("pair"),
+            "quality_known": st.get("answer_reliability") is not None and st.get("correction_rate") is not None,   # BD-88 워밍업
             "retrieved_handles": [r["proposal"].get("target") for r in result["rounds"]           # S7: 무엇을 꺼냈나
                                   if r.get("proposal", {}).get("tool") == "retrieve" and r.get("decision", {}).get("verdict") == "ALLOW"],
             "pressure_high": any(x.startswith("압력 HIGH") for x in dec["context_policy"]["reasons"]),   # S4 동작점
@@ -389,7 +390,8 @@ def stratified(rows_by: dict) -> "dict | None":
     for c in ("G", "H"):                  # S4 · S7
         if c in rows_by:
             rs = rows_by[c]
-            out[f"S4_{c}"] = {"pressure_high": sum(1 for r in rs if r.get("pressure_high")), "runs": len(rs)}
+            out[f"S4_{c}"] = {"pressure_high": sum(1 for r in rs if r.get("pressure_high")), "runs": len(rs),
+                              "quality_known": sum(1 for r in rs if r.get("quality_known"))}
             hs = {}
             for r in rs:
                 for h in r.get("retrieved_handles") or []:
@@ -469,7 +471,9 @@ def report_md(rep: dict) -> str:
                          + f" · 하나 빼면 부호가 바뀌는 과업: {v['loto_sign_changes'] or '없음'}")
         for c in ("G", "H"):
             if st.get(f"S4_{c}"):
-                L.append(f"- S4 {c}: 압력 HIGH {st[f'S4_{c}']['pressure_high']}/{st[f'S4_{c}']['runs']} · S7 꺼낸 handle {st.get(f'S7_{c}')}")
+                s4 = st[f"S4_{c}"]
+                L.append(f"- S4 {c}: 압력 HIGH {s4['pressure_high']}/{s4['runs']} · 품질 상태가 정해진 실행 {s4.get('quality_known')}/{s4['runs']}"
+                         f" · S7 꺼낸 handle {st.get(f'S7_{c}')}")
     L += ["", "## 짝 비교(사전등록 판정)", ""]
     for c in rep["comparisons"]:
         q = c["quality"]

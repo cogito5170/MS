@@ -1312,6 +1312,10 @@ class F2bBundle(unittest.TestCase):
         self.assertEqual(rep["warmup_runs"], 9)
         self.assertEqual({c: s["runs"] for c, s in rep["summary"].items()}, {"B": 16, "G": 16, "H": 16})
         self.assertEqual(rep["versions"]["tasks"], "datacenter-tasks-3")
+        # 고침 2(BD-88): 워밍업 셋 뒤 측정 실행은 모두 두 품질 상태가 정해져 있다 · 워밍업은 모두 모른다
+        self.assertTrue(all(r["quality_known"] for r in rep["rows"] if not r["warmup"]))
+        self.assertFalse(any(r["quality_known"] for r in rep["rows"] if r["warmup"]))
+        self.assertEqual(rep["stratified"]["S4_G"]["quality_known"], 16)
         vers = {c: {r["context_version"] for r in rep["rows"] if r["config"] == c and not r["warmup"]} for c in "BGH"}
         self.assertEqual(vers, {"B": {"ctx-fixed-1"}, "G": {"ctx-adaptive-4"}, "H": {"ctx-adaptive-4c"}})
         self.assertIn("R2", rep["stratified"])
