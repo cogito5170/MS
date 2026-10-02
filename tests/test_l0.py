@@ -158,9 +158,12 @@ class WithL0(unittest.TestCase):
         if str(SENSOR) not in sys.path:
             sys.path.insert(0, str(SENSOR))
         from llmsensor.state.normalize import from_telemetry
+        from llmsensor.telemetry.schema import check as v4check
         from telemetry.compat import to_sensor_records
         _, evs = self.run_once()
-        fields = {o.field for b in from_telemetry(to_sensor_records(evs)) for o in b.observations}
+        recs = to_sensor_records(evs)
+        self.assertEqual([v4check(r) for r in recs], [[]] * len(recs))      # inproc:ms 도 Sensor 꼴을 통과(CMD-T3)
+        fields = {o.field for b in from_telemetry(recs) for o in b.observations}
         self.assertLessEqual({"tokens.output", "tool.is_error", "tool.name", "call.stop_reason"}, fields)
 
 
