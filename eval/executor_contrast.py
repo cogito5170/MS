@@ -4,6 +4,8 @@
 
 모으는 곳 둘
 - `tests`: MS 시험 전체를 이 프로세스에서 돌리며 DC 길(결정 문맥 id 가 있는) 실행을 모은다(Action 이 잰 43 번 + 그 뒤 더한 시험).
+  진짜 DC 문맥(`tests_real_dc`, state_source 에 DC 의 reuse_key 가 있다)과 시험의 가짜 리더(`tests_fake_reader`, id 만 준다)로도 가른다 --
+  가짜 리더에는 Guard 가 DCView 를 지을 재료가 없어 E 가 난다.
 - `sim`: 모의 평가 DC 길(묶음 둘 · 모든 칸 · 반복 2 · 씨앗 3).
 
 견주는 것: 도구 이름 · 겨냥 · 결정 id. 실제 쪽은 훅이 아니라 handle 결과에서 **따로** 읽는다 -- `result.executed` 와
@@ -39,6 +41,7 @@ def _collect(run) -> list:
         out = orig(self, request)
         if intent.dc_id(out["decision"]["state_source"]):
             rows.append({"executed": out["result"]["executed"], "decision": out["decision"]["id"],
+                         "real_dc": "reuse_key" in out["decision"]["state_source"],  # 진짜 DC MSStateReader 의 기록 · 시험의 가짜 리더
                          "executions": out.get("executions", []), "dispatch_on": self.dispatch is not None})
         return out
     R.Runtime.handle = handle
@@ -105,12 +108,14 @@ def sim_rows() -> list:
 def main(argv) -> int:
     if not executor_shadow.available():
         raise SystemExit("action · guard 를 못 읽는다 -- MS_ACTION_PATH · MS_GUARD_PATH")
-    rep = {"tests": _tally(tests_rows()), "sim": _tally(sim_rows())}
+    t = tests_rows()
+    rep = {"tests": _tally(t), "tests_real_dc": _tally([r for r in t if r["real_dc"]]),
+           "tests_fake_reader": _tally([r for r in t if not r["real_dc"]]), "sim": _tally(sim_rows())}
     print(json.dumps(rep, ensure_ascii=False, indent=1))
     if len(argv) > 1:
         with open(argv[1], "w", encoding="utf-8") as f:
             json.dump(rep, f, ensure_ascii=False, indent=1)
-    bad = sum(rep[k]["table"].get("다름", 0) + rep[k]["table"].get("남음", 0) for k in rep)
+    bad = sum(rep[k]["table"].get("다름", 0) + rep[k]["table"].get("남음", 0) for k in ("tests", "sim"))
     return 1 if bad else 0
 
 

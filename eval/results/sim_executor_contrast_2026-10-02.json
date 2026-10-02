@@ -1,0 +1,66 @@
+{
+ "tests": {
+  "dc_runs": 47,
+  "executed": 44,
+  "table": {
+   "명령 없음": 18,
+   "실행 없음 · 명령 없음": 3,
+   "shadow 꺼짐(시험이 끈 것)": 3,
+   "같음": 23
+  },
+  "no_command_why": {
+   "Guard DENY(E) -- 명령 재료가 없다": 11,
+   "의도가 없다": 2,
+   "Guard DENY(D) -- 명령 재료가 없다": 5
+  },
+  "diffs": []
+ },
+ "tests_real_dc": {
+  "dc_runs": 35,
+  "executed": 33,
+  "table": {
+   "shadow 꺼짐(시험이 끈 것)": 3,
+   "명령 없음": 7,
+   "같음": 23,
+   "실행 없음 · 명령 없음": 2
+  },
+  "no_command_why": {
+   "Guard DENY(D) -- 명령 재료가 없다": 5,
+   "Guard DENY(E) -- 명령 재료가 없다": 2
+  },
+  "diffs": []
+ },
+ "tests_fake_reader": {
+  "dc_runs": 12,
+  "executed": 11,
+  "table": {
+   "명령 없음": 11,
+   "실행 없음 · 명령 없음": 1
+  },
+  "no_command_why": {
+   "Guard DENY(E) -- 명령 재료가 없다": 9,
+   "의도가 없다": 2
+  },
+  "diffs": []
+ },
+ "sim": {
+  "dc_runs": 480,
+  "executed": 464,
+  "table": {
+   "같음": 432,
+   "명령 없음": 32,
+   "실행 없음 · 명령 없음": 16
+  },
+  "no_command_why": {
+   "Guard DENY(D) -- 명령 재료가 없다": 32
+  },
+  "diffs": []
+ },
+ "versions": {
+  "ms": "2b57b77 + 대조 스크립트의 가르기",
+  "DC": "ce3a0bc",
+  "action": "0071ddf(작업 사본) · 2f4791e(옆 저장소 초록 확인)",
+  "guard": "4bd7d14",
+  "Telemetry": "89d2887"
+ }
+}
