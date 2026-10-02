@@ -1,0 +1,57 @@
+{
+ "versions": {
+  "ms": "725f596",
+  "MS_DC_PATH": "ce3a0bc",
+  "MS_ACTION_PATH": "443f8eb",
+  "MS_GUARD_PATH": "88be800"
+ },
+ "sim": {
+  "intents": 464,
+  "same": 432,
+  "different": 0,
+  "apart": 32,
+  "by_arbiter": {
+   "ALLOW 0": 464
+  },
+  "diff": {},
+  "apart_table": {
+   "('ALLOW', '0') -> ('SAFE_ACTION', 'D')": 32
+  },
+  "reasons": {
+   "('ALLOW', '0') -> ('SAFE_ACTION', 'D')": [
+    "[D] open_ticket(external): DC 가 불완전하다(쓸 수 없는 필수 상태 ['session.correction_rate']) · 필수 · 의도가 쓴 키 가운데 낡은 것 ['fleet/srv04.status', 'fleet/srv04.temp_c']",
+    "[D] 목적의 기본 행동 KEEP 로 갈아 끼운다"
+   ]
+  }
+ },
+ "scripted": {
+  "intents": 960,
+  "same": 952,
+  "different": 0,
+  "apart": 8,
+  "by_arbiter": {
+   "ALLOW 0": 12,
+   "DENY A1": 240,
+   "DENY A2": 240,
+   "DENY A3": 416,
+   "DENY A4": 48,
+   "DENY A7": 4
+  },
+  "diff": {},
+  "apart_table": {
+   "('DENY', 'A7') -> ('SAFE_ACTION', 'D')": 4,
+   "('ALLOW', '0') -> ('SAFE_ACTION', 'D')": 4
+  },
+  "reasons": {
+   "('DENY', 'A7') -> ('SAFE_ACTION', 'D')": [
+    "[D] reboot(irreversible): DC 가 불완전하다(쓸 수 없는 필수 상태 ['session.context_pressure', 'session.correction_rate', 'session.latency_pressure', 'session.token_budget_pressure']) · 필수 · 의도가 쓴 키 가운데 낡은 것 ['fleet/srv04.status', 'fleet/srv04.temp_c']",
+    "[A7] reboot 는 irreversible 인데 허가가 없다",
+    "[D] 목적의 기본 행동 KEEP 로 갈아 끼운다"
+   ],
+   "('ALLOW', '0') -> ('SAFE_ACTION', 'D')": [
+    "[D] reboot(irreversible): DC 가 불완전하다(쓸 수 없는 필수 상태 ['session.context_pressure', 'session.correction_rate', 'session.latency_pressure', 'session.token_budget_pressure']) · 필수 · 의도가 쓴 키 가운데 낡은 것 ['fleet/srv04.status', 'fleet/srv04.temp_c']",
+    "[D] 목적의 기본 행동 KEEP 로 갈아 끼운다"
+   ]
+  }
+ }
+}
