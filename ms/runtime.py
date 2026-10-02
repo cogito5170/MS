@@ -83,8 +83,7 @@ class Runtime:
         U.install(self.um)
         self.arbiter = Arbiter(registry, grants, clock=self.clock)
         self.guard = guard_shadow.Shadow(registry, grants) if guard_shadow.available() else None   # shadow(CMD-M17)
-        self.dispatch = (executor_shadow.Dispatch(registry) if self.guard and executor_shadow.available()
-                         else None)          # 실행기 shadow(CMD-M20). 명령 재료가 Guard 결과라 Guard 가 있을 때만
+        self.dispatch = executor_shadow.Dispatch(registry) if executor_shadow.available() else None   # 실행기 shadow(CMD-M20 · M21)
         self.ctx_sel = context_selector or FixedContext()
         self.prompt_sel = prompt_selector or FixedPrompt()
         default = next(iter(self.providers)) if self.providers else None
@@ -127,14 +126,17 @@ class Runtime:
         pre = []                  # 도구를 실행하면 결정 기록은 그 직전에 지어진다(PC-19 G1 -- ActionCommand.decision_ref 의 자리)
         guards, executions, by_round = [], [], {}
 
-        def shadow(rnd, p, ctx, d):
-            """Arbiter 판정 직후, 같은 지금 상태로 Guard 를 부른다. 기록만 한다 -- 실행은 Arbiter 가 정한다."""
+        def decided(rnd, p, ctx, d):
+            """Arbiter 판정 직후: 이 판의 의도 · Arbiter 판정을 붙잡고, Guard 가 있으면 같은 지금 상태로 부른다(기록만)."""
             it = intent.intent_of(source, p.to_dict())
             if it is None or isinstance(it, list):
                 return
-            guards.append({"round": rnd, "intent_id": it.id, "arbiter": [d.verdict, d.rule],
-                           "guard": self.guard.check(it, mat, ctx, self.m)})
-            by_round[rnd] = (it, guards[-1]["guard"])
+            g = None
+            if self.guard:
+                guards.append({"round": rnd, "intent_id": it.id, "arbiter": [d.verdict, d.rule],
+                               "guard": self.guard.check(it, mat, ctx, self.m)})
+                g = guards[-1]["guard"]
+            by_round[rnd] = (it, d.verdict, g)
 
         def before_execute(r):
             pre.append(self._decision(state, cplan, pplan, choice, r, source))
@@ -142,15 +144,15 @@ class Runtime:
 
         def dispatch(rnd, p, decision_ref):
             """도구 호출 바로 앞: 실행기가 이 명령을 무엇으로 내보낼지(shadow). 실행은 지금 길 그대로다."""
-            it, g = by_round.get(rnd, (None, None))
-            executions.append({"round": rnd, **self.dispatch.shadow(it, g, decision_ref, self.clock() * 1000)})
+            it, verdict, g = by_round.get(rnd, (None, None, None))
+            executions.append({"round": rnd, **self.dispatch.shadow(it, verdict, g, decision_ref, self.clock() * 1000)})
         pipe = Pipeline(self.m, self.reg, provider, None, self.arbiter,
                         model=choice.get("model"), stream=bool(request.get("stream")),
                         tool_mode=request.get("tool_mode", "text"), preamble=request.get("preamble", ""),
                         cr=ContextRuntime.from_plan(self.reg, plan), recorder=l0rec,
                         provider_label=choice["provider"],
                         before_execute=before_execute,
-                        after_decide=shadow if self.guard and intent.dc_id(source) else None,
+                        after_decide=decided if intent.dc_id(source) and (self.guard or self.dispatch) else None,
                         dispatch_shadow=dispatch if self.dispatch and intent.dc_id(source) else None)
         res = pipe.run(request["task"], request.get("queries", ()), max_rounds=request.get("max_rounds", self.max_rounds),
                        supplied=supplied)

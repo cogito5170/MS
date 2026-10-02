@@ -14,8 +14,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from action.params import check_args
+from action.canonical import digest
+from action.spec import ActionModel, ActionSpec, to_ms_tool
+
 from . import predicate
-from .model import PropertySpec
 
 RISKS = ("read", "local", "external", "irreversible")
 RETRIEVE = "retrieve"
@@ -47,22 +50,8 @@ class ToolSpec:
         return cls(**kw)
 
     def check_args(self, args) -> list:
-        if not isinstance(args, dict):
-            return ["args 가 객체가 아니다"]
-        out = []
-        for k in args:
-            if k not in self.params:
-                out.append(f"모르는 인자 {k}")
-        for k, ps in self.params.items():
-            if k not in args:
-                if ps.get("required", True):
-                    out.append(f"인자 {k} 가 없다")
-                continue
-            spec = PropertySpec(k, **{x: ps[x] for x in ("type", "unit", "min", "max", "values") if x in ps})
-            _, problem = spec.validate(args[k])
-            if problem:
-                out.append(problem)
-        return out
+        """인자 검사 한 벌(`action.params.check_args`, BD-111)."""
+        return check_args(self.params, args)
 
     def run(self, target: str, args: dict) -> list:
         if self.handler is not None:
@@ -83,17 +72,38 @@ class ToolSpec:
 
 
 class ToolRegistry:
+    """도구 명세의 집은 action 의 ActionModel 이다(BD-108 · BD-111). 도구 정의(JSON)는 `ActionSpec.from_tool` 로 읽고, ToolSpec 은
+    그 투영(`to_ms_tool`)에 MS 실행 쪽 결합(handler · effect)만 붙인 것이다. retrieve 는 CR 안의 일이라 ActionSpec 이 아니다.
+    ActionSpec 의 판본은 그 도구 정의의 내용 해시, ActionModel 의 판본은 명세 전부의 해시다 -- 정의가 바뀌면 판본도 바뀐다."""
+
     def __init__(self, tools=()):
         self.tools: dict = {}
+        self.specs: dict = {}            # 이름 -> ActionSpec (retrieve 빼고)
         self.add(ToolSpec(RETRIEVE, "*", "맥락에서 줄여 둔 것(handle)을 다시 꺼낸다. args: {\"handle\": \"h1\"}",
                           params={"handle": {"type": "string"}}, risk="read"))
         for t in tools:
             self.add(t)
 
     def add(self, t) -> ToolSpec:
-        t = t if isinstance(t, ToolSpec) else ToolSpec.from_dict(t)
-        self.tools[t.name] = t
-        return t
+        if isinstance(t, ToolSpec) and t.name == RETRIEVE:
+            self.tools[t.name] = t
+            return t
+        handler, effect = (t.handler, t.effect) if isinstance(t, ToolSpec) else (None, t.get("effect", []))
+        d = ({k: getattr(t, k) for k in ("name", "target_model", "description", "params", "preconditions", "risk")}
+             if isinstance(t, ToolSpec) else t)
+        keep = {k: d[k] for k in ("name", "target_model", "params", "preconditions", "risk", "description") if k in d}
+        keep["preconditions"] = [list(p) for p in keep.get("preconditions", ())]
+        spec = ActionSpec.from_tool(keep, f"ms-{digest(keep)}")
+        tool = ToolSpec.from_dict(dict(to_ms_tool(spec), effect=effect))
+        tool.handler = handler
+        self.specs[spec.name] = spec
+        self.tools[spec.name] = tool
+        return tool
+
+    @property
+    def model(self) -> ActionModel:
+        specs = tuple(self.specs[n] for n in sorted(self.specs))
+        return ActionModel(f"ms-tools-{digest([s.to_dict() for s in specs])}", specs)
 
     def get(self, name):
         return self.tools.get(name)

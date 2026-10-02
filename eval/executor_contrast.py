@@ -11,6 +11,7 @@
 견주는 것: 도구 이름 · 겨냥 · 결정 id. 실제 쪽은 훅이 아니라 handle 결과에서 **따로** 읽는다 -- `result.executed` 와
 `decision.id`. 실행기 쪽은 `executions[].execution.would_dispatch`(action_type · target · decision_ref).
 - 같음 / 다름(셋 중 하나라도) / 명령 없음(실행했는데 명령이 없다 -- 까닭별) / 남음(명령은 있는데 실행이 없다).
+- 재료 대 Guard(CMD-M21): 명령 재료는 Arbiter 가 ALLOW 한 의도에서 온다. Guard 도 ALLOW 면 guard `command_material` 과 같은가.
 Runtime.handle 을 감싸 모은다(평가 도구).
 """
 from __future__ import annotations
@@ -54,7 +55,7 @@ def _collect(run) -> list:
 
 def _tally(rows) -> dict:
     t = collections.Counter()
-    why, diffs = collections.Counter(), []
+    why, vs, diffs = collections.Counter(), collections.Counter(), []
     for r in rows:
         if not r["dispatch_on"]:
             t["shadow 꺼짐(시험이 끈 것)"] += 1
@@ -65,6 +66,8 @@ def _tally(rows) -> dict:
         for x in r["executions"]:
             if not x.get("execution"):
                 why[x.get("error", "?")] += 1
+            if "material_vs_guard" in x:
+                vs[x["material_vs_guard"]] += 1
         if not actual and not disp:
             t["실행 없음 · 명령 없음"] += 1
         elif actual and not disp:
@@ -78,7 +81,7 @@ def _tally(rows) -> dict:
             t["다름"] += 1
             diffs.append({"actual": actual, "dispatch": disp})
     return {"dc_runs": len(rows), "executed": sum(1 for r in rows if r["executed"]), "table": dict(t),
-            "no_command_why": dict(why), "diffs": diffs[:20]}
+            "no_command_why": dict(why), "material_vs_guard": dict(vs), "diffs": diffs[:20]}
 
 
 def tests_rows() -> list:
@@ -115,7 +118,8 @@ def main(argv) -> int:
     if len(argv) > 1:
         with open(argv[1], "w", encoding="utf-8") as f:
             json.dump(rep, f, ensure_ascii=False, indent=1)
-    bad = sum(rep[k]["table"].get("다름", 0) + rep[k]["table"].get("남음", 0) for k in ("tests", "sim"))
+    bad = sum(rep[k]["table"].get("다름", 0) + rep[k]["table"].get("남음", 0) + rep[k]["table"].get("명령 없음", 0)
+              + rep[k]["material_vs_guard"].get("다름", 0) for k in ("tests_real_dc", "sim"))
     return 1 if bad else 0
 
 

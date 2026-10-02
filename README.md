@@ -184,17 +184,25 @@ provider 계획 · 중재 결정 · 재현 입력은 `DecisionRecord` 에 있고
 - 어댑터 · 재료 오류는 DENY(E) 로 남긴다.
 - 대조표: `python3 eval/guard_contrast.py`. 시험은 `MS_GUARD_PATH`(기본 `../guard`)에 guard 가 있을 때만 돈다.
 
-**실행기를 DC 길에 shadow 로 붙인다 (`ms/executor_shadow.py`, 선택 의존 · CMD-M20 · BD-108).** action 의 실행기 · 명세와 guard 의 명령
-재료가 import 되고 DC 길일 때만 돈다.
+**실행기를 DC 길에 shadow 로 붙인다 (`ms/executor_shadow.py`, CMD-M20 · M21 · BD-108 · BD-111).** DC 길일 때만 돈다(guard 는 선택이고 대조에만 쓴다).
 - 도구 호출 **바로 앞**에서 ActionCommand 를 짓는다. 재료는 셋이다.
-  - Guard `command_material`
+  - **Arbiter 가 ALLOW 한 의도**의 `intent_id · action · target · args`. E3(Guard enforce) 전까지는 실행을 정하는 쪽의 판정에서 짓는다(BD-111)
   - `before_execute` 가 Pipeline 에 돌려준 결정 id
   - `issued_at` = 시계 × 1000(ms)
 - 그 명령으로 `action.executor.execute(…, mode="shadow")` 를 부른다. 처리기를 부르지 않고 L0 에도 적지 않는다. 실행은 지금 길(`tool.run` · `tool.*`) 그대로다.
-- ActionModel 은 ToolRegistry 의 도구(retrieve 빼고)를 `ActionSpec.from_tool` 로 읽는다. 판본은 도구 정의의 해시다.
-- Guard 가 ALLOW · SAFE_ACTION 이 아니면 명령이 없고, 그 까닭만 남는다.
+- ActionModel 은 `ToolRegistry.model` 이다(아래 "도구 명세").
+- Guard 결과는 옆에 기록만 한다. 둘 다 ALLOW 면 재료가 guard `command_material` 과 같은지 `material_vs_guard` 에 적는다.
+  Arbiter 가 막은 판에는 명령이 없다.
 - 원장에는 `{"kind": "execution", "decision_ref", "round", "model", "command", "execution"}` 줄로 남고, `handle()` 의 `executions` 에도 담긴다.
 - 대조표: `python3 eval/executor_contrast.py`. `would_dispatch`(도구 · 겨냥 · 결정 id)를 실제 실행과 견준다.
+
+**도구 명세 · 술어 · 인자 검사는 action 의 한 벌이다 (BD-108 · BD-111).** action(`action-contract`)은 **필수 의존**이고 pyproject 에
+커밋 sha 로 고정한다(guard · health 와 같은 sha).
+- `ToolRegistry` 는 도구 정의(JSON)를 `ActionSpec.from_tool` 로 읽는다. ToolSpec 은 그 투영(`to_ms_tool`)에 MS 실행 쪽 결합(handler ·
+  effect)만 붙인 것이다. `ToolRegistry.model` 이 ActionModel 이다. retrieve 는 CR 안의 일이라 들지 않는다.
+- `ms/predicate.py` 는 `action.predicate` 를 다시 내보내는 얇은 층이다(`props_of` 만 집합으로 감싼다). `ToolSpec.check_args` 는
+  `action.params.check_args` 다.
+- action 이 없으면 `import ms` 가 `ImportError` 로 멈춘다. 다른 벌로 조용히 가지 않는다.
 
 ## State — 사용의 모형 (`usage_model.py`)
 
@@ -264,6 +272,8 @@ python3 -m ms eval --tasks eval/tasks/datacenter.json \
 | 비용 대조 | 일치 | 한 실행: 입력 2,140(거의 다 1 시간 캐시 쓰기, $4/MTok) + 출력 94($10/MTok) = $0.0095 ≈ CLI 보고 $0.009496 |
 
 ## 돌리기
+
+action 은 필수 의존이다. `pip install -e .` 가 고정한 sha 를 깐다(또는 `PYTHONPATH` 에 cogito5170/action).
 
 ```bash
 python3 -m ms demo                                   # 처음의 데이터센터 예시(대본 LLM)
