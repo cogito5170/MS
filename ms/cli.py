@@ -125,6 +125,7 @@ def main(argv=None):
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--layout", choices=("stable_prefix", "legacy"), help="프롬프트 배치(기본 stable_prefix)")
     s.add_argument("--state-reader", choices=("dc",), help="상태를 DC 결정 문맥으로 읽는다(MS_DC_PATH, 기본 ../DC)")
+    s.add_argument("--cost-limit", type=float, help="provider 보고 비용 합(USD)이 이것을 넘으면 멈춘다")
     s.add_argument("--prereg", default="eval/PREREG_적응정책.md", help="이 실행이 따르는 사전등록 문서(보고에 적힌다)")
     s.add_argument("--fresh", action="store_true",
                    help="실행마다 다른 표지를 시스템 글 뒤에 붙여, 되풀이한 과업이 프롬프트 전체를 캐시에서 읽지 않게 한다")
@@ -224,7 +225,7 @@ def _eval(a):
     slots = {k: v for k, v in (("openai", a.openai), ("claude", a.claude)) if v}
     rep = evaluate(a.tasks, slots, tuple(c.strip() for c in a.configs.split(",") if c.strip()), a.reps,
                    order=a.order, seed=a.seed, layout=a.layout, fresh=a.fresh, state_reader=a.state_reader,
-                   prereg=a.prereg)
+                   prereg=a.prereg, cost_limit=a.cost_limit)
     md = report_md(rep)
     if a.out:
         with open(a.out + ".json", "w", encoding="utf-8") as f:

@@ -127,7 +127,7 @@ class Lane:
                 row["dc_diff"] = getattr(self.reader, "diff", None)       # S5: DC 상태가 snapshot 과 다른 상태 이름
                 log(f"  {self.letter} r{self.rep} {task['id']:<18} {'성공' if ok else '실패'} "
                     f"in={rec['tokens']['input_tokens']} 캐시={rec['tokens']['cached_input_tokens']} "
-                    f"ms={rec['latency']['total_ms']:.0f} arbiter={out['decision']['arbiter_decision']['all']}")
+                    f"ms={rec['latency']['total_ms']:.0f} $={rec['cost']['usd']} arbiter={out['decision']['arbiter_decision']['all']}")
                 if ok or not task.get("correction"):
                     rt.feedback(rec["run"]["run_id"], False)
                     break
@@ -140,18 +140,32 @@ class Lane:
 
 
 def run_all(configs, slots, tasks_file, reps, provider_kw=None, order="interleaved", seed=0, log=print,
-            layout=None, fresh=None, state_reader=None) -> dict:
+            layout=None, fresh=None, state_reader=None, budget: "dict | None" = None) -> dict:
     """order=interleaved: 반복마다 · 과업마다 칸 순서를 씨앗 고정 난수로 섞는다. 앞 칸이 쓴 provider 캐시를 늘 같은 칸이
     읽는 치우침을 줄인다(재측정에서 실제로 났다). 그래도 **같은 지시문을 쓰는 칸끼리는 캐시를 나눠 쓴다** -- 그래서
     캐시 안 된 입력(`uncached_input_tokens`)도 따로 비교한다. order=blocked: 칸마다 통째로(예전 방식)."""
     rng = random.Random(seed)
     rows_by = {c: [] for c in configs}
+
+    def spend(row) -> bool:
+        """비용 한도(budget['limit'], provider 보고 USD 합). 넘으면 멈춘다 -- 남은 실행을 돌리지 않는다. 측정 자체는 바꾸지 않는다."""
+        if budget is None:
+            return False
+        budget["spent"] = budget.get("spent", 0.0) + (row.get("cost_usd") or 0.0)
+        budget["runs"] = budget.get("runs", 0) + 1
+        if budget.get("limit") is not None and budget["spent"] > budget["limit"]:
+            budget["stopped"] = {"after_runs": budget["runs"], "spent": budget["spent"]}
+            log(f"!! 비용 한도 ${budget['limit']} 를 넘었다(${budget['spent']:.4f}) -- 멈춘다")
+            return True
+        return False
     if order == "blocked":
         for c in configs:
             for rep in range(reps):
                 lane = Lane(c, rep, slots, tasks_file, provider_kw, layout, fresh, state_reader)
                 for task in tasks_file["tasks"]:
                     rows_by[c].append(lane.run_task(task, log))
+                    if spend(rows_by[c][-1]):
+                        return rows_by
         return rows_by
     for rep in range(reps):
         lanes = {c: Lane(c, rep, slots, tasks_file, provider_kw, layout, fresh, state_reader) for c in configs}
@@ -162,6 +176,8 @@ def run_all(configs, slots, tasks_file, reps, provider_kw=None, order="interleav
                 row = lanes[c].run_task(task, log)
                 row["order"] = [rep, i, seq.index(c)]
                 rows_by[c].append(row)
+                if spend(row):
+                    return rows_by
     return rows_by
 
 
@@ -537,7 +553,8 @@ def dc_state_reader():
 
 def evaluate(tasks_path: str, slots: dict, configs=("A", "B", "C", "D", "E", "F"), reps: int = 3,
              provider_kw=None, order: str = "interleaved", seed: int = 0, log=print, layout: "str | None" = None,
-             fresh: bool = False, state_reader: "str | None" = None, prereg: str = "eval/PREREG_적응정책.md") -> dict:
+             fresh: bool = False, state_reader: "str | None" = None, prereg: str = "eval/PREREG_적응정책.md",
+             cost_limit: "float | None" = None) -> dict:
     """fresh: 실행마다 다른 표지를 시스템 글 **바로 뒤**(사용자 글 맨 앞)에 붙인다. 같은 과업을 한 시간 안에 되풀이하면
     provider 가 프롬프트 **전체**를 캐시에서 읽는다(재측정 2 의 B · D: 99.9%). 진짜 쓰임에서는 상태가 매번 달라 앞부분
     (시스템 글)만 캐시된다 -- fresh 가 그것을 흉내 낸다."""
@@ -556,7 +573,8 @@ def evaluate(tasks_path: str, slots: dict, configs=("A", "B", "C", "D", "E", "F"
     reader, reader_info = (dc_state_reader() if state_reader == "dc" else (None, None))
     if state_reader not in (None, "dc"):
         raise ValueError(f"모르는 state_reader {state_reader!r} (dc 만)")
-    rows_by = run_all(use, slots, tf, reps, provider_kw, order, seed, log, layout, stamp, reader)
+    budget = {"limit": cost_limit, "spent": 0.0, "runs": 0, "stopped": None}
+    rows_by = run_all(use, slots, tf, reps, provider_kw, order, seed, log, layout, stamp, reader, budget)
     caps = {}
     for c in use:
         slot = CONFIGS[c][0]
@@ -572,7 +590,7 @@ def evaluate(tasks_path: str, slots: dict, configs=("A", "B", "C", "D", "E", "F"
     analyzed = {c: [r for r in rs if not r.get("warmup")] for c, rs in rows_by.items()}   # 워밍업은 분석에서 뺀다
     from .usage_model import MODEL_VERSION
     return {"tasks_file": tasks_path, "reps": reps, "order": order, "seed": seed, "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "layout": layout, "fresh": bool(fresh), "state_reader": reader_info,
+            "layout": layout, "fresh": bool(fresh), "state_reader": reader_info, "budget": budget,
             "slots": slots, "versions": {"usage_model": MODEL_VERSION, "tasks": tf.get("version", "datacenter-tasks-1"), "prompt_text": TEMPLATE_VERSIONS[layout]},
             "capabilities": caps, "not_evidence": " / ".join(note),
             "summary": {c: summarize(r) for c, r in analyzed.items()}, "comparisons": compare(analyzed),

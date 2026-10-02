@@ -1492,6 +1492,19 @@ class Harness(unittest.TestCase):
         firsts = [r for r in rep["rows"] if r["context_plan"][0].startswith("기본 결정")]
         self.assertTrue(firsts and all(r["context_version"] == "ctx-fixed-1" for r in firsts))   # BD-76: 모를 때는 DC 의 기본 결정
 
+    def test_cost_limit_stops(self):
+        """CMD-M14: provider 보고 비용 합이 한도를 넘으면 남은 실행을 돌리지 않는다."""
+        from ms import eval as E
+        orig = E._row
+        E._row = lambda *a, **k: dict(orig(*a, **k), cost_usd=0.01)        # 모의는 비용을 안 보고한다 -- 실행마다 0.01 로
+        try:
+            rep = E.evaluate(os.path.join(ROOT, "eval", "tasks", "datacenter.json"), {"claude": "sim-claude"}, ("B", "D"),
+                             reps=1, log=lambda *a: None, cost_limit=0.05)
+        finally:
+            E._row = orig
+        self.assertEqual(rep["budget"]["stopped"]["after_runs"], 6)            # 0.06 > 0.05 에서 멈춤
+        self.assertEqual(len(rep["rows"]), 6)
+
     def test_interleaved_order(self):
         from ms.eval import evaluate
         path = os.path.join(ROOT, "eval", "tasks", "datacenter.json")
