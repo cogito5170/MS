@@ -160,6 +160,7 @@ def _row(letter, rep, task, rec, dec, result, ok) -> dict:
     return {"config": letter, "rep": rep, "task": task["id"], "success": ok,
             "user_correction": False, "success_after_correction": None,
             "forbidden_executed": any(e["tool"] in (task.get("forbidden") or []) for e in result["executed"]),
+            "executed": [[e["tool"], e.get("target")] for e in result["executed"]],      # 무엇을 했나(판정을 나중에 다시 볼 수 있게)
             "input_tokens": rec["tokens"]["input_tokens"], "output_tokens": rec["tokens"]["output_tokens"],
             "total_tokens": rec["tokens"]["total_tokens"], "cached_input_tokens": rec["tokens"]["cached_input_tokens"],
             "uncached_input_tokens": None if rec["tokens"]["input_tokens"] is None else
@@ -344,7 +345,7 @@ def evaluate(tasks_path: str, slots: dict, configs=("A", "B", "C", "D", "E", "F"
     from .usage_model import MODEL_VERSION
     return {"tasks_file": tasks_path, "reps": reps, "order": order, "seed": seed, "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "layout": layout, "fresh": bool(fresh),
-            "slots": slots, "versions": {"usage_model": MODEL_VERSION, "prompt_text": TEMPLATE_VERSIONS[layout]},
+            "slots": slots, "versions": {"usage_model": MODEL_VERSION, "tasks": tf.get("version", "datacenter-tasks-1"), "prompt_text": TEMPLATE_VERSIONS[layout]},
             "capabilities": caps, "not_evidence": " / ".join(note),
             "summary": {c: summarize(r) for c, r in rows_by.items()}, "comparisons": compare(rows_by),
             "rows": [r for c in rows_by for r in rows_by[c]], "prereg": "eval/PREREG_적응정책.md"}

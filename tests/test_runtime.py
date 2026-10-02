@@ -941,6 +941,10 @@ class SuccessIsJudgedOutside(unittest.TestCase):
         self.assertTrue(judge(m, {"expect_noop": True}, []))
 
 
+def spec_of(tf):
+    return json.load(open(os.path.join(ROOT, tf["world"]["spec"]), encoding="utf-8"))
+
+
 class Harness(unittest.TestCase):
     def test_eval_runs_and_marks_simulation(self):
         from ms.eval import evaluate
@@ -953,6 +957,21 @@ class Harness(unittest.TestCase):
             "t1-hot", "t2-fan", "t3-normal-target", "t4-summarized", "t5-reboot-asked", "t6-all-normal", "t7-hottest")})
         for c in rep["comparisons"]:
             self.assertIn(c["quality"]["verdict"], ("비열등", "열등(실격)", "판정 불가", "판정 불가(구간이 넓다)"))
+
+    def test_task_bundle_v2_t6_world_is_all_normal(self):
+        """BD-49 · X4: t6 은 '다 정상인 세계에서 아무것도 안 한다' 다. 판본 1 에는 srv05 팬 고장이 남아 있었다."""
+        from ms.eval import _world
+        from ms.cli import clock_for
+        tf = json.load(open(os.path.join(ROOT, "eval", "tasks", "datacenter.json"), encoding="utf-8"))
+        self.assertEqual(tf["version"], "datacenter-tasks-2")
+        t6 = next(t for t in tf["tasks"] if t["id"] == "t6-all-normal")
+        spec, m, reg = _world(tf, t6, clock_for(spec_of(tf)))
+        abnormal = [(nid, k, v.value) for nid, n in m.graph.nodes.items() for k, v in n.props.items()
+                    if k in ("status", "fan") and v.value not in ("normal", "ok")]
+        self.assertEqual(abnormal, [])
+        t2 = next(t for t in tf["tasks"] if t["id"] == "t2-fan")                         # 대조: 다른 과업에는 팬 고장이 그대로다
+        _, m2, _ = _world(tf, t2, clock_for(spec_of(tf)))
+        self.assertEqual(m2.graph.nodes["srv05"].props["fan"].value, "failed")
 
     def test_harness_feeds_its_judgment_back(self):
         """PC-13: 판정은 하니스가 하고 Runtime.evaluation() 으로 세션 상태에 돌려준다 -- 과업마다 한 번(고침 뒤 재시도 포함)."""
@@ -981,6 +1000,8 @@ class Harness(unittest.TestCase):
         self.assertTrue(all(r["uncached_input_tokens"] is not None for r in a["rows"]))
         self.assertIn("uncached_input_tokens", a["comparisons"][0]["metrics"])
         self.assertEqual(a["versions"]["usage_model"], "usage-model-4")
+        self.assertEqual(a["versions"]["tasks"], "datacenter-tasks-2")
+        self.assertTrue(all(isinstance(r["executed"], list) for r in a["rows"]))
 
     def test_cli_ask(self):
         p = subprocess.run([sys.executable, "-m", "ms", "ask", "ms/examples/datacenter.json", "--telemetry",
