@@ -26,6 +26,8 @@ from . import usage_model as U
 from .arbiter import DENY, Arbiter
 from .cr import VERSION as CR_VERSION, ContextRuntime
 from .pipeline import Pipeline
+from . import l0
+from .decision_record import DecisionRecord
 from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt
 from .run_telemetry import RunRecord, cost_of
 from .tools import RETRIEVE
@@ -53,7 +55,8 @@ class Runtime:
     def __init__(self, manager, registry, providers: dict, *, grants=(), context_selector=None, prompt_selector=None,
                  provider_policy=None, base_context: "dict | None" = None, prices: "dict | None" = None,
                  ledger_path: "str | None" = None, max_rounds: int = 4, wall=time.perf_counter,
-                 usage_manager=None, prompt_layout: "str | None" = None):
+                 usage_manager=None, prompt_layout: "str | None" = None, l0_ledger: "str | None" = None,
+                 l0_sink=None):
         self.m, self.reg, self.providers = manager, registry, dict(providers)
         self.um = usage_manager or manager
         from .prompt import DEFAULT_LAYOUT, TEMPLATE_VERSIONS
@@ -68,6 +71,11 @@ class Runtime:
         self.base_context = dict(BASE_CONTEXT, **(base_context or {}))
         self.prices, self.ledger_path, self.max_rounds, self.wall = prices, ledger_path, max_rounds, wall
         self.records: dict = {}
+        self.decisions: dict = {}
+        self.l0_ledger, self.l0_sink = l0_ledger, l0_sink      # L0 Telemetry(선택 의존). 둘 다 없으면 안 낸다
+        if (l0_ledger or l0_sink) and not l0.available():
+            raise ImportError("l0_ledger · l0_sink 를 주었는데 L0 Telemetry 가 없다 -- "
+                              "pip install git+https://github.com/cogito5170/Telemetry")
 
     def open_session(self, name: str, budgets: dict) -> str:
         return U.open_session(self.um, name, budgets)
@@ -82,20 +90,30 @@ class Runtime:
         cplan, pplan = plan["context_policy"], plan["prompt_policy"]
         choice = self.provider_policy.select(state, request)
         provider = self.providers[choice["provider"]]
+        run_id = request.get("run_id") or f"run-{next(_ids)}-{int(time.time() * 1000) % 10**8}"
+        l0rec = l0.recorder(run_id, self.l0_ledger, self.l0_sink)
+        l0rec.run_start(model=choice.get("model"), provider=choice["provider"])
         pipe = Pipeline(self.m, self.reg, provider, None, self.arbiter,
                         model=choice.get("model"), stream=bool(request.get("stream")),
                         tool_mode=request.get("tool_mode", "text"), preamble=request.get("preamble", ""),
-                        cr=ContextRuntime.from_plan(self.reg, plan))
+                        cr=ContextRuntime.from_plan(self.reg, plan), recorder=l0rec,
+                        provider_label=choice["provider"])
         res = pipe.run(request["task"], request.get("queries", ()), max_rounds=request.get("max_rounds", self.max_rounds))
         total_ms = (self.wall() - t0) * 1000
-        rec = self._record(request, sid, state, cplan, pplan, choice, provider, res, total_ms)
+        dec, rec = self._record(request, sid, state, cplan, pplan, choice, provider, res, total_ms, run_id)
+        # 끝 요약: 런타임(MS)이 아는 사실만. 비용은 provider 가 보고했을 때만(가격표 계산은 L0 가 아니다)
+        l0rec.run_end(decision_ref=dec.id, terminal_reason=res.outcome, num_turns=len(res.rounds),
+                      run_duration_ms=round(total_ms, 3), model=rec.run["model"],
+                      cost_usd=rec.cost["usd"] if rec.cost["source"] == "provider" else None)
         U.link_provider(self.um, sid, choice["provider"])
         matched = res.rounds[0]["context"]["matched"] if res.rounds and "context" in res.rounds[0] else None
         for sig in rec.to_signals(sid, self.um.clock(), matched_rows=matched):
             self.um.ingest(sig)
         self.records[rec.run["run_id"]] = rec
+        self.decisions[dec.id] = dec
+        self._ledger({"kind": "decision", "decision": dec.to_dict()})     # 결정 먼저, 그 결정이 낳은 실행은 id 로 잇는다
         self._ledger({"kind": "run", "record": rec.to_dict()})
-        return {"run_id": rec.run["run_id"], "record": rec.to_dict(), "result": res.to_dict()}
+        return {"run_id": rec.run["run_id"], "record": rec.to_dict(), "decision": dec.to_dict(), "result": res.to_dict()}
 
     def feedback(self, run_id: str, user_correction: bool):
         """사람이 그 실행을 고쳤나. 그것도 텔레메트리다 -- correction_rate 상태가 여기서 나온다."""
@@ -108,7 +126,8 @@ class Runtime:
         return r
 
     # -- 기록 ---------------------------------------------------------------------------------------------------
-    def _record(self, request, sid, state, cplan, pplan, choice, provider, res, total_ms) -> RunRecord:
+    def _record(self, request, sid, state, cplan, pplan, choice, provider, res, total_ms,
+                run_id) -> "tuple[DecisionRecord, RunRecord]":
         calls = res.calls
         decisions = [r["decision"] for r in res.rounds if "decision" in r]
         proposals = [r["proposal"] for r in res.rounds if "proposal" in r]
@@ -149,13 +168,17 @@ class Runtime:
             c = cost_of(calls[0]["model"] if calls else "", tokens, self.prices)
             cost = {"usd": c, "source": "price_table" if c is not None else None}
         final = decisions[-1] if decisions else None
-        run_id = request.get("run_id") or f"run-{next(_ids)}-{int(time.time() * 1000) % 10**8}"
         exts = {}
         for c in calls:
             for k, v in (c["extensions"] or {}).items():
                 exts.setdefault(k, []).append(v)
         unsupported = sorted({u for c in calls for u in c["unsupported"]})
-        return RunRecord(
+        dec = DecisionRecord(
+            cr=CR_VERSION, state=state, context_policy=cplan, prompt_policy=pplan, provider_policy=choice,
+            arbiter_decision={"final": final, "all": [[d["verdict"], d["rule"]] for d in decisions]},
+            inputs={"base_context": self.base_context, "default_provider": self.provider_policy.default
+                    if isinstance(self.provider_policy, ExplicitProvider) else None})
+        return dec, RunRecord(
             run={"run_id": run_id, "session_id": request["session"], "provider": choice["provider"],
                  "model": calls[0]["model"] if calls else choice.get("model"), "timestamp": self.m.clock(),
                  "simulated": bool(getattr(provider, "simulated", False))},
@@ -165,11 +188,7 @@ class Runtime:
                          "non_progress_rounds": denies + retrievals},
             outcome={"task_success": check_success(self.m, request, res.executed), "user_correction": None,
                      "tool_success": tool_ok},
-            policy={"cr": CR_VERSION, "state": state, "context_policy": cplan, "prompt_policy": pplan,
-                    "provider_policy": choice,
-                    "arbiter_decision": {"final": final, "all": [[d["verdict"], d["rule"]] for d in decisions]},
-                    "inputs": {"base_context": self.base_context, "default_provider": self.provider_policy.default
-                               if isinstance(self.provider_policy, ExplicitProvider) else None}},
+            decision_ref=dec.id,
             cost=cost,
             estimated={"context_tokens": "input_tokens × context_chars/prompt_chars",
                        "retrieved_tokens": "input_tokens × retrieved_chars/prompt_chars"},

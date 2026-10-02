@@ -5,7 +5,8 @@
     latency      ttft_ms · inference_ms · total_ms
     interaction  llm_calls · tool_calls · retries · context_retrievals · arbiter_denies · proposal_invalid · non_progress_rounds
     outcome      task_success · user_correction · tool_success
-    policy       context_policy · prompt_policy · provider_policy · arbiter_decision · state(정책이 본 상태)
+    decision_ref 이 실행을 낸 결정 기록의 id(DecisionRecord.id). 결정의 **내용**(정책 판본 · 계획 · 중재 결정 · 정책이 본 상태)은
+                 여기 없다 -- ms/decision_record.py. 텔레메트리는 무슨 일이 일어났나만 적는다(ms-run-telemetry-3)
     cost         usd · source(provider 보고 | 가격표 | 없음)
     estimated    추정한 칸과 방법
     unsupported  요청했지만 provider 가 못 해서 안 보낸 옵션
@@ -24,7 +25,7 @@
     user_correction     사람이 고쳤나. 피드백이 올 때 따로 들어온다. 아니면 None
     tool_success        도구를 돌렸으면 그 결과가 tool_error 없이 들어왔나. 안 돌렸으면 None
 
-`to_signals()` 는 이 기록을 텔레메트리 신호로 편다(entity = 세션). extensions · unsupported · policy 는 **신호로 안 편다** --
+`to_signals()` 는 이 기록을 텔레메트리 신호로 편다(entity = 세션). extensions · unsupported · decision_ref 는 **신호로 안 편다** --
 provider 고유 값이 상태의 뜻을 바꿀 길을 없앤다(원칙 9 · 10). 그것들은 원장(JSONL)에만 남는다.
 """
 from __future__ import annotations
@@ -32,7 +33,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 
-SCHEMA_VERSION = "ms-run-telemetry-2"     # 1 -> 2 (2026-10-02): walp_* 칸을 arbiter_* 로(WALP 는 쓰지 않는다)
+SCHEMA_VERSION = "ms-run-telemetry-3"     # 1 -> 2: walp_* 칸을 arbiter_* 로 · 2 -> 3 (2026-10-02): policy 칸을 결정 기록으로 떼고 decision_ref 만
 
 # OpenTelemetry GenAI 이름과의 짝(내보낼 때). 짝이 없는 칸은 MS 고유다
 OTEL = {"run.provider": "gen_ai.provider.name", "run.model": "gen_ai.request.model",
@@ -47,7 +48,7 @@ class RunRecord:
     latency: dict
     interaction: dict
     outcome: dict
-    policy: dict
+    decision_ref: str
     cost: dict = field(default_factory=lambda: {"usd": None, "source": None})
     estimated: dict = field(default_factory=dict)
     unsupported: list = field(default_factory=list)

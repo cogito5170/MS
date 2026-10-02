@@ -90,10 +90,10 @@ class Lane:
             rec = out["record"]
             ok = rec["outcome"]["task_success"]
             if attempt == 0:
-                row = _row(self.letter, self.rep, task, rec, out["result"])
+                row = _row(self.letter, self.rep, task, rec, out["decision"], out["result"])
                 log(f"  {self.letter} r{self.rep} {task['id']:<18} {'성공' if ok else '실패'} "
                     f"in={rec['tokens']['input_tokens']} 캐시={rec['tokens']['cached_input_tokens']} "
-                    f"ms={rec['latency']['total_ms']:.0f} arbiter={rec['policy']['arbiter_decision']['all']}")
+                    f"ms={rec['latency']['total_ms']:.0f} arbiter={out['decision']['arbiter_decision']['all']}")
                 if ok or not task.get("correction"):
                     rt.feedback(rec["run"]["run_id"], False)
                     break
@@ -131,9 +131,9 @@ def run_all(configs, slots, tasks_file, reps, provider_kw=None, order="interleav
     return rows_by
 
 
-def _row(letter, rep, task, rec, result) -> dict:
-    decisions = rec["policy"]["arbiter_decision"]["all"]
-    st = rec["policy"]["state"]
+def _row(letter, rep, task, rec, dec, result) -> dict:
+    decisions = dec["arbiter_decision"]["all"]
+    st = dec["state"]
     rats = [len(r["proposal"].get("rationale") or "") for r in result["rounds"] if "proposal" in r]
     prefixes = sorted({c["cd"]["prefix_hash"] for c in result["calls"] if c.get("cd")})
     return {"config": letter, "rep": rep, "task": task["id"], "success": rec["outcome"]["task_success"],
@@ -151,10 +151,10 @@ def _row(letter, rep, task, rec, result) -> dict:
             "denies": rec["interaction"]["arbiter_denies"], "cost_usd": rec["cost"]["usd"],
             "recovered": bool(rec["outcome"]["task_success"]) if any(v == "DENY" for v, _ in decisions) else None,
             "state_known": any(v is not None for k, v in st.items() if k != "model_version"),
-            "context_plan": rec["policy"]["context_policy"]["reasons"], "prompt_plan": rec["policy"]["prompt_policy"]["reasons"],
+            "context_plan": dec["context_policy"]["reasons"], "prompt_plan": dec["prompt_policy"]["reasons"],
             "unsupported": rec["unsupported"], "outcome": result["outcome"], "simulated": rec["run"]["simulated"],
-            "rationale_chars": _mean(rats), "prefix_hashes": prefixes, "prompt_template": rec["policy"]["prompt_policy"].get("template"),
-            "instruction_mode": rec["policy"]["prompt_policy"]["plan"]["instruction_mode"]}
+            "rationale_chars": _mean(rats), "prefix_hashes": prefixes, "prompt_template": dec["prompt_policy"].get("template"),
+            "instruction_mode": dec["prompt_policy"]["plan"]["instruction_mode"]}
 
 
 def _mean(xs):

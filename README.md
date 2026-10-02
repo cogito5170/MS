@@ -98,7 +98,7 @@ State Manager          manager.StateManager              Model 이 해석 → �
 | 8 | 모든 provider 를 같은 텔레메트리 꼴로 | `Normalization.test_same_work_same_canonical_usage` — 같은 일을 세 provider 가 제 말투로 보고해도 canonical 이 같다 |
 | 9 | 원 텔레메트리 ≠ 의미 있는 State | `test_raw_counts_are_not_state` — 토큰 수는 그래프 · 질의에 없고 파생 상태만 있다 |
 | 10 | provider 모양이 State · Policy 모형에 안 스민다 | `test_provider_field_names_stay_in_adapters` · `ProviderCannotChangeSemantics` |
-| — | 정책 결정은 기록된 State + 판본으로 재현된다 | `Reproducible` — `replay()` 가 맞고, 기록을 고치면(상태 · 판본) 잡는다 |
+| — | 정책 결정은 기록된 State + 판본으로 재현된다 | `Reproducible` — `replay(결정 기록)` 가 맞고, 기록을 고치면(상태 · 판본) 잡는다. 실행 기록은 결정을 id 로만 가리킨다 |
 
 **시험이 헛돌지 않는지** 코드를 일부러 망가뜨려 봤다(2026-10-01). 새 불변식 12 가지 — Claude 캐시를 입력에 안 더함 · Gemini 사고 토큰 뺌 ·
 Gemini 추론 옵션 흉내 · 비스트리밍 TTFT 지어냄 · 확장을 신호로 · 원 측정을 그래프에 · 품질 우선 끔 · 도구 좁히기 안 함 · 중재 전에 도구 ·
@@ -131,12 +131,25 @@ tokens       input_tokens · output_tokens · cached_input_tokens · context_tok
 latency      ttft_ms (스트리밍일 때만) · inference_ms · total_ms
 interaction  llm_calls · tool_calls · retries · context_retrievals · arbiter_denies · proposal_invalid · non_progress_rounds
 outcome      task_success (그래프로 판정, 기준이 없으면 None) · user_correction (피드백으로) · tool_success
-policy       state · context_policy · prompt_policy · provider_policy · arbiter_decision · inputs   ← 재현용
+decision_ref 이 실행을 낸 결정 기록의 id ← 결정의 내용은 여기 없다(아래)
 cost         usd · source (provider | price_table | None)
 estimated    * 추정한 칸과 방법        unsupported  못 해서 안 보낸 옵션        extensions  provider 고유 값
 ```
 
 `otel()` 이 OpenTelemetry GenAI 이름(`gen_ai.usage.input_tokens` 등)으로도 낸다.
+
+**L0 Telemetry 로도 낸다 (`ms/l0.py`, 선택 의존 · 2026-10-02).** [cogito5170/Telemetry](https://github.com/cogito5170/Telemetry) 가 깔려 있고
+`Runtime(..., l0_ledger="l0.jsonl")`(또는 `ms ask … --l0-ledger l0.jsonl`)을 주면, 실행마다 `run.start` · 모형 호출마다 `llm.request → llm.response | llm.error` ·
+도구 호출마다 `tool.start → tool.end` · `run.end`(끝난 까닭 · 회전 수 · 벽시계 · provider 보고 비용 · `decision_ref`)를 L0 원장에 덧붙인다.
+계측 자리는 둘뿐이다 -- `Pipeline._call`(provider 를 부르는 유일한 자리)과 ALLOW 가지의 도구 호출(도구를 부르는 유일한 자리).
+**L0 에 가지 않는 것**: 정책이 본 상태 · 계획 · 중재 결정(ALLOW/DENY · 규칙) · 맥락 글 · 겨냥 글 · 예외 메시지 · 가격표 비용 · 추정 토큰.
+사용량은 canonical(OTel 꼴) 그대로 `total_input_tokens` 로 -- 캐시 밖 입력을 지어내지 않는다. 같은 원장을 Sensor 가 `telemetry.compat` 으로 읽는다.
+L0 가 없으면 아무것도 안 내고 그대로 돈다. 달라고 했는데 없으면 `ImportError` 다(조용히 안 버린다).
+
+**결정 기록은 텔레메트리와 따로다 (`decision_record.DecisionRecord`, ms-run-telemetry-3 · 2026-10-02).** 정책이 본 상태 · 맥락 / 프롬프트 /
+provider 계획 · 중재 결정 · 재현 입력은 `DecisionRecord` 에 있고, id 는 내용의 sha256 이다. 원장에는 `{"kind": "decision"}` 줄이 먼저,
+그 결정이 낳은 `{"kind": "run"}` 줄이 `decision_ref` 로 그것을 가리킨다(`linked()` -- 결정 기록을 고치면 끊긴다). `replay()` 는 결정 기록을
+받는다. 까닭: 텔레메트리는 "무슨 일이 일어났나" 만 적는다 -- [L0 Telemetry](https://github.com/cogito5170/Telemetry) docs/TELEMETRY.md 6 · 7 절.
 
 ## State — 사용의 모형 (`usage_model.py`)
 
