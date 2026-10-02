@@ -28,6 +28,7 @@ from .arbiter import DENY, NOOP, Arbiter
 from .canonical import CanonicalRequest
 from .context import ContextPolicy
 from .cr import ContextRuntime
+from .l0 import ERROR_TABLE, NullRecorder
 from .llm import proposal_from
 from .prompt import plan_inference
 from .providers import CallableProvider, LLMProvider
@@ -55,8 +56,11 @@ class Pipeline:
     def __init__(self, manager, registry, llm, policy: "ContextPolicy | None" = None,
                  arbiter: "Arbiter | None" = None, retrieve_max: int = 20, prompt_plan: "dict | None" = None,
                  model: "str | None" = None, stream: bool = False, tool_mode: str = "text",
-                 prompt_layout: "str | None" = None, preamble: str = "", cr: "ContextRuntime | None" = None):
+                 prompt_layout: "str | None" = None, preamble: str = "", cr: "ContextRuntime | None" = None,
+                 recorder=None, provider_label: "str | None" = None):
         self.m, self.reg = manager, registry
+        self.rec = recorder or NullRecorder()      # L0 Telemetry -- 무슨 일이 일어났나만(ms/l0.py)
+        self.provider_label = provider_label       # L0 에 적을 provider 이름(런타임이 고른 이름 -- 모의면 sim-*)
         self.provider = llm if isinstance(llm, LLMProvider) else CallableProvider(llm)
         self.llm = llm
         self.cr = cr or ContextRuntime(registry, policy, prompt_plan, prompt_layout, retrieve_max)
@@ -69,12 +73,15 @@ class Pipeline:
         """최소 맥락만(진단 · `ms context` 용). 판마다의 결정은 run() 이 cr.decide() 로 짓는다."""
         return self.cr.minimal_context(self.m, task, queries, retrieved_ids, denied)
 
-    def _call(self, cd):
+    def _call(self, cd, call_index: int = 0):
         prompt = cd.prompt
         req = CanonicalRequest(self.model or self.provider.model, prompt, plan_inference(self.prompt_plan or {}),
                                self.tool_mode, self.stream and self.provider.supports_stream)
-        resp = self.provider.collect(req) if req.stream else self.provider.generate(req)
         full = prompt.text()
+        name = self.provider_label or self.provider.name
+        with self.rec.llm_call(call_index, name, req.model, prompt_chars=len(full), table=ERROR_TABLE.get(name)) as c:
+            resp = self.provider.collect(req) if req.stream else self.provider.generate(req)
+            c.response(usage=resp.to_dict()["usage"], usage_format="otel", model=resp.model, finish_reason=resp.finish)
         ctx_text = prompt.context_text()
         retrieved = [r.payload() for q, r in cd.ctx.kept if q == "retrieved"]
         info = {"provider": resp.provider, "model": resp.model, "finish": resp.finish,
@@ -95,7 +102,7 @@ class Pipeline:
             rnd = {"round": i + 1}
             res.rounds.append(rnd)
             try:
-                resp, info = self._call(cd)
+                resp, info = self._call(cd, len(res.calls))
             except Exception as e:
                 rnd["context"] = ctx.stats()
                 rnd["llm_error"] = f"{type(e).__name__}: {e}"
@@ -122,10 +129,15 @@ class Pipeline:
                         retrieved.append(nid)
                 continue
             tool = self.reg.get(p.tool)                 # 여기 -- ALLOW 가지 안 -- 가 도구가 불리는 유일한 자리
-            try:
-                obs = tool.run(p.target, p.args)
-            except Exception as e:
-                obs = [{"entity": p.target, "signal": "tool_error", "value": f"{type(e).__name__}: {e}"}]
+            with self.rec.tool(tool.name, {"target": p.target, "args": p.args}, call_index=len(res.calls) - 1) as t:
+                try:
+                    obs = tool.run(p.target, p.args)
+                except Exception as e:
+                    obs = [{"entity": p.target, "signal": "tool_error", "value": f"{type(e).__name__}: {e}"}]
+                    t.result(is_error=True, exception=type(e).__name__)
+                else:                                   # 도구가 tool_error 를 **보고**했나 -- 관측이다
+                    t.result(is_error=any(o.get("signal") == "tool_error" for o in obs),
+                             output=json.dumps(obs, ensure_ascii=False, default=str))
             res.executed.append({"tool": tool.name, "target": p.target})
             for o in obs:
                 o = dict(o)

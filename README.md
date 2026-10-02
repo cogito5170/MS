@@ -135,6 +135,14 @@ estimated    * 추정한 칸과 방법        unsupported  못 해서 안 보낸
 
 `otel()` 이 OpenTelemetry GenAI 이름(`gen_ai.usage.input_tokens` 등)으로도 낸다.
 
+**L0 Telemetry 로도 낸다 (`ms/l0.py`, 선택 의존 · 2026-10-02).** [cogito5170/Telemetry](https://github.com/cogito5170/Telemetry) 가 깔려 있고
+`Runtime(..., l0_ledger="l0.jsonl")`(또는 `ms ask … --l0-ledger l0.jsonl`)을 주면, 실행마다 `run.start` · 모형 호출마다 `llm.request → llm.response | llm.error` ·
+도구 호출마다 `tool.start → tool.end` · `run.end`(끝난 까닭 · 회전 수 · 벽시계 · provider 보고 비용 · `decision_ref`)를 L0 원장에 덧붙인다.
+계측 자리는 둘뿐이다 -- `Pipeline._call`(provider 를 부르는 유일한 자리)과 ALLOW 가지의 도구 호출(도구를 부르는 유일한 자리).
+**L0 에 가지 않는 것**: 정책이 본 상태 · 계획 · 중재 결정(ALLOW/DENY · 규칙) · 맥락 글 · 겨냥 글 · 예외 메시지 · 가격표 비용 · 추정 토큰.
+사용량은 canonical(OTel 꼴) 그대로 `total_input_tokens` 로 -- 캐시 밖 입력을 지어내지 않는다. 같은 원장을 Sensor 가 `telemetry.compat` 으로 읽는다.
+L0 가 없으면 아무것도 안 내고 그대로 돈다. 달라고 했는데 없으면 `ImportError` 다(조용히 안 버린다).
+
 **결정 기록은 텔레메트리와 따로다 (`decision_record.DecisionRecord`, ms-run-telemetry-3 · 2026-10-02).** 정책이 본 상태 · 맥락 / 프롬프트 /
 provider 계획 · 중재 결정 · 재현 입력은 `DecisionRecord` 에 있고, id 는 내용의 sha256 이다. 원장에는 `{"kind": "decision"}` 줄이 먼저,
 그 결정이 낳은 `{"kind": "run"}` 줄이 `decision_ref` 로 그것을 가리킨다(`linked()` -- 결정 기록을 고치면 끊긴다). `replay()` 는 결정 기록을

@@ -27,7 +27,23 @@ from ..canonical import CanonicalRequest, CanonicalResponse, Usage
 
 
 class ProviderError(RuntimeError):
-    pass
+    """status · body · headers 는 provider 가 **준** 것(HTTP 오류일 때만). 없으면 None -- 메시지 글에서 꺼내지 않는다.
+    L0 Telemetry 의 llm.error 가 이것을 그대로 읽는다(ms/l0.py)."""
+
+    def __init__(self, msg: str, status: "int | None" = None, body: "dict | None" = None,
+                 headers: "dict | None" = None):
+        super().__init__(msg)
+        self.status, self.body, self.headers = status, body, headers
+
+
+def _http_error(e) -> ProviderError:
+    raw = e.read().decode(errors="replace")
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        body = None
+    return ProviderError(f"HTTP {e.code}: {raw[:500]}", e.code, body if isinstance(body, dict) else None,
+                         dict(e.headers.items()) if e.headers else None)
 
 
 class HttpTransport:
@@ -44,7 +60,7 @@ class HttpTransport:
             with urllib.request.urlopen(self._req(url, headers, body), timeout=self.timeout) as r:
                 return json.loads(r.read().decode())
         except urllib.error.HTTPError as e:
-            raise ProviderError(f"HTTP {e.code}: {e.read().decode(errors='replace')[:500]}") from None
+            raise _http_error(e) from None
         except urllib.error.URLError as e:
             raise ProviderError(f"연결 실패: {e.reason}") from None
 
@@ -58,7 +74,7 @@ class HttpTransport:
                         if data and data != "[DONE]":
                             yield data
         except urllib.error.HTTPError as e:
-            raise ProviderError(f"HTTP {e.code}: {e.read().decode(errors='replace')[:500]}") from None
+            raise _http_error(e) from None
         except urllib.error.URLError as e:
             raise ProviderError(f"연결 실패: {e.reason}") from None
 

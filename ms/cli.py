@@ -104,6 +104,7 @@ def main(argv=None):
     s.add_argument("--stream", action="store_true")
     s.add_argument("--grant", action="append", default=[])
     s.add_argument("--ledger")
+    s.add_argument("--l0-ledger", help="L0 Telemetry 사건 원장(JSONL). cogito5170/Telemetry 가 깔려 있어야 한다")
     s.add_argument("--budget", type=int)
     s.add_argument("--json", action="store_true")
     s = sub.add_parser("eval")
@@ -192,7 +193,7 @@ def _ask(a):
     rt = Runtime(m, reg, {a.provider: prov}, grants=set(spec.get("grants") or []) | set(a.grant),
                  context_selector=AdaptiveContext() if a.context == "adaptive" else FixedContext(),
                  prompt_selector=AdaptivePrompt() if a.prompt == "adaptive" else FixedPrompt(),
-                 base_context=base, ledger_path=a.ledger)
+                 base_context=base, ledger_path=a.ledger, l0_ledger=a.l0_ledger)
     rt.open_session("cli", spec.get("budgets") or {})
     out = rt.handle({"session": "cli", "task": a.task, "queries": spec.get("queries", ()), "stream": a.stream})
     if a.json:
