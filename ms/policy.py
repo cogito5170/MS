@@ -162,6 +162,28 @@ class AdaptiveContext2(AdaptiveContext):
 
 
 CONTEXT_SELECTORS = {c.version: c for c in (FixedContext(), AdaptiveContext(), AdaptiveContext2())}
+
+# BD-76 · BD-81: 맥락 계획의 안전 기본 결정. 값은 DC 목적 명세(context_runtime 의 default_decision)가 주고 MS 는 읽는다.
+DEFAULT_CONTEXT_ACTIONS = {"KEEP": FixedContext}      # KEEP = 행을 그대로 싣는다 = 고정 맥락
+
+
+def undecided(selector, state: dict) -> bool:
+    """선택기가 필수 상태를 몰라 규칙을 못 정하나(BD-76). 고정은 늘 정한다. 적응 선택기는 압력 둘(token_budget · context)을
+    다 모르면 못 정한다 -- 그때 지금의 계획은 '고정과 같다' 다. (품질 상태 answer_reliability · correction_rate 의 모름은 여기서
+    아직 '못 정함' 으로 세지 않는다 -- baseline 에 물음.)"""
+    if isinstance(selector, FixedContext):
+        return False
+    return state.get("token_budget_pressure") is None and state.get("context_pressure") is None
+
+
+def default_context_plan(action: str, base: dict) -> dict:
+    """DC 가 준 기본 결정 이름 -> 맥락 계획. 모르는 이름이면 거절한다(지어내지 않는다)."""
+    sel = DEFAULT_CONTEXT_ACTIONS.get(action)
+    if sel is None:
+        raise ValueError(f"모르는 기본 결정 {action!r} -- 아는 것 {sorted(DEFAULT_CONTEXT_ACTIONS)}")
+    plan = sel().plan({}, base)
+    plan["reasons"] = [f"기본 결정 {action}(필수 상태를 몰라 규칙이 정해지지 않음, BD-76)"]
+    return plan
 PROMPT_SELECTORS = {c.version: c for c in (FixedPrompt(), AdaptivePrompt())}
 
 

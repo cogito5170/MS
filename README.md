@@ -28,6 +28,9 @@ Telemetry → State → CR(맥락) → Provider → LLM → Arbiter
 > **질의도 결정 문맥을 거친다(PC-23, cr-2)**: `state_reader` 가 인자를 셋 받으면 요청을 넘기고, 리더가 질의 결과(`queries`)를 돌려주면
 > CR 은 그래프에 직접 묻지 않고 그것으로 맥락을 짓는다. **낡은 값은 LLM 에 안 간다**(BD-65): 값은 null · `_unusable`. 질의에
 > `allow_stale: true` 를 명시할 때만 값과 `_stale` 표시를 보인다(지금 그렇게 하는 질의는 없다).
+> **cr-3 (BD-85 · BD-76)**: LLM 에 보이는 속성 순서는 CR 이 정한다(질의의 select 순, 없으면 모형 선언 순) -- DC 길과 직접 길이 같은
+> 글자열을 낸다(시험). 꺼냄은 두 길 모두 이번 요청의 질의 결과 안에서만. 결정 문맥이 준 기본 결정(`record.default_action`, KEEP)은
+> 선택기가 필수 상태를 몰라 규칙을 못 정할 때 쓴다.
 > **BD-46 으로 대체 예정**: baseline 결정으로 Sensor 상태는 Sensor state-export → DC → `Runtime(state_reader=…)` 한 길로만 온다.
 > `sensing.py` 는 더 넓히지 않고, 그 길이 확인되면 걷어 낸다. CR 의 자리(BD-21)와 Validate · Arbitrate · Guard 배분(BD-24)은 `docs/계획.md`.
 

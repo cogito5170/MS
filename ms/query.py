@@ -205,3 +205,19 @@ def result_from_dc(name: str, q: dict, manager) -> QueryResult:
     drop = q.get("droppable", [])
     return QueryResult(name, rows, int(q["matched"]), int(q.get("priority", 0)),
                        json.loads(drop) if isinstance(drop, str) else list(drop))
+
+
+def display_order(res: QueryResult, select, manager) -> QueryResult:
+    """BD-85: LLM 에 보일 속성 순서 -- 질의의 select 순, 없으면 모형 선언 순(속성 다음 파생). 결정 문맥(DC)은 순서에 무관하게
+    속성을 이름 순으로 싣고, 직접 길은 select 순이나 그래프에 들어온 순으로 낸다. 같은 요청이면 두 길이 같은 글자열을 내야 한다."""
+    rows = []
+    for r in res.rows:
+        if select is not None:
+            keys = list(select)
+        else:
+            m = manager.models.get(r.model)
+            keys = (list(m.properties) + list(m.derived)) if m is not None else []
+        rank = {k: i for i, k in enumerate(keys)}
+        props = dict(sorted(r.props.items(), key=lambda kv: (rank.get(kv[0], len(rank)), kv[0])))
+        rows.append(Row(r.id, r.model, r.version, props, r.must, r.edges))
+    return QueryResult(res.name, rows, res.matched, res.priority, res.droppable)

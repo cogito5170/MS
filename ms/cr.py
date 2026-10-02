@@ -23,9 +23,10 @@ from dataclasses import dataclass, field
 from .context import ContextPolicy
 from .policy import BASE_CONTEXT, FixedContext, FixedPrompt
 from .prompt import DEFAULT_LAYOUT, TEMPLATE_VERSIONS, PromptPolicy
-from .query import QueryResult, StateQuery, result_from_dc, run_query, tool_query, withhold_stale
+from .query import QueryResult, StateQuery, display_order, result_from_dc, run_query, tool_query, withhold_stale
 
-VERSION = "cr-2"     # cr-1 -> 2 (2026-10-02, PC-23 · BD-65): 결정 문맥의 질의 결과를 받는다 · 낡은 값은 allow_stale 없이는 None
+VERSION = "cr-3"     # cr-2 -> 3 (2026-10-02, BD-85): 표시 순서를 CR 이 정한다 · 꺼냄은 질의 결과 안에서만(직접 길도)
+# cr-1 -> 2 (2026-10-02, PC-23 · BD-65): 결정 문맥의 질의 결과를 받는다 · 낡은 값은 allow_stale 없이는 None
 
 
 def prefix_hash(text: str) -> str:
@@ -78,20 +79,16 @@ class ContextRuntime:
             results = [result_from_dc(q.name, supplied[q.name], manager) for q in qs]
         else:
             results = [withhold_stale(run_query(q, manager), q.allow_stale) for q in qs]
+        # BD-85: 표시 순서는 CR 의 일 -- 두 길이 같은 글자열을 내게 속성을 질의의 select 순(없으면 모형 선언 순)으로 놓는다
+        results = [display_order(r, q.select, manager) for q, r in zip(qs, results)]
         retrieved = []
-        if retrieved_ids:
-            if supplied is not None:          # 꺼낼 행도 결정 문맥 안에서만(다시 그래프에 묻지 않는다)
-                pool = {}
-                for r in results:
-                    for row in r.rows:
-                        pool.setdefault(row.id, row)
-                rows = [pool[i] for i in dict.fromkeys(retrieved_ids) if i in pool][: self.retrieve_max]
-                rq = QueryResult("retrieved", rows, len(rows))
-            else:                             # 낡은 값은 그 행을 낸 질의가 allow_stale 을 명시했을 때만
-                ok = {row.id for q, r in zip(qs, results) if q.allow_stale for row in r.rows}
-                raw = run_query(StateQuery("retrieved", ids=list(retrieved_ids), limit=self.retrieve_max), manager)
-                rq = QueryResult("retrieved", [row if row.id in ok else withhold_stale(
-                    QueryResult("", [row], 1), False).rows[0] for row in raw.rows], raw.matched)
+        if retrieved_ids:                     # 꺼낼 행은 이번 요청의 질의 결과 안에서만(두 길 모두 그래프에 다시 묻지 않는다, cr-3)
+            pool = {}
+            for r in results:
+                for row in r.rows:
+                    pool.setdefault(row.id, row)
+            rows = [pool[i] for i in dict.fromkeys(retrieved_ids) if i in pool][: self.retrieve_max]
+            rq = QueryResult("retrieved", rows, len(rows))
             retrieved = rq.rows
             results = results + [rq]          # 청한 행에도 도구를 고를 수 있게
         offers = tool_query(self.reg, results, manager)

@@ -519,6 +519,62 @@ class QueryThroughDecisionContext(unittest.TestCase):
         self.assertEqual([r["id"] for r in got], ["srv07"])                   # 결정 문맥 밖의 srv01 은 꺼내지 않는다
         self.assertEqual(got[0]["temp_c"], 12.5)                              # 그래프의 61.0 이 아니라 DC 가 준 값
 
+    def test_dc_path_and_direct_path_show_the_same_text(self):
+        """BD-85: 같은 요청이면 DC 길과 직접 길이 LLM 에 같은 글자열을 보인다(꺼낸 행까지) -- 배선이 보이는 것을 바꾸지 않는다."""
+        dc = os.environ.get("MS_DC_PATH", os.path.join(ROOT, "..", "DC"))
+        if not os.path.isdir(os.path.join(dc, "dc")):
+            self.skipTest("옆에 DC 가 없다(MS_DC_PATH)")
+        from ms.cr import ContextRuntime
+        from ms.eval import dc_state_reader
+        Reader, _ = dc_state_reader()
+        spec, m, reg, *_ = world()
+        U.install(m)
+        sid = U.open_session(m, "s", {"token_budget": 1000})
+        odd = {"name": "odd", "model": "Server", "select": ["fan", "temp_c"], "priority": 3}     # 모형 선언 순과 다른 select
+        queries = spec["queries"] + [odd]
+        sup = Reader(m, m)(m, sid, {"queries": queries})["queries"]
+        txt = json.loads(ContextRuntime.from_plan(reg, ContextRuntime.plan({k: None for k in U.STATES}, FixedContext(), FixedPrompt(),
+                                                                         {"budget_chars": 20000})).minimal_context(
+            m, "t", [odd], supplied={"odd": sup["odd"]}).render())
+        self.assertEqual([k for k in txt["state"][0] if k in ("fan", "temp_c")], ["fan", "temp_c"])   # select 순 그대로
+        spec = dict(spec, queries=queries)
+        for st in ({k: None for k in U.STATES}, dict({k: None for k in U.STATES}, token_budget_pressure="HIGH")):
+            plan = ContextRuntime.plan(st, AdaptiveContext(), FixedPrompt(), {"budget_chars": 1500})
+            cr = ContextRuntime.from_plan(reg, plan)
+            direct = cr.decide(m, "t", spec["queries"])
+            via_dc = cr.decide(m, "t", spec["queries"], supplied=sup)
+            self.assertEqual(direct.prompt.text(), via_dc.prompt.text())
+            self.assertEqual(direct.record["prefix_hash"], via_dc.record["prefix_hash"])
+            handles = sorted({i for h in direct.ctx.handles.values() for i in h.get("ids", [])})
+            if handles:                                                           # 꺼낸 뒤에도 같다
+                self.assertEqual(cr.decide(m, "t", spec["queries"], handles).prompt.text(),
+                                 cr.decide(m, "t", spec["queries"], handles, supplied=sup).prompt.text())
+
+    def test_default_action_is_read_and_changes_nothing_today(self):
+        """BD-76 · CMD-M9: 규칙이 정해지지 않으면 결정 문맥의 default_action(KEEP)을 쓴다. 지금 선택기는 그때 이미 고정과 같은
+        계획을 내므로 보이는 맥락은 그대로다. 압력을 알면 기본 결정을 쓰지 않는다."""
+        from ms.policy import AdaptiveContext2, default_context_plan, undecided
+        base = dict(BASE_CONTEXT, budget_chars=1500)
+        unknown = {k: None for k in U.STATES}
+        for sel in (AdaptiveContext(), AdaptiveContext2()):
+            self.assertTrue(undecided(sel, unknown))
+            self.assertEqual(default_context_plan("KEEP", base)["params"], sel.plan(unknown, base)["params"])
+            self.assertFalse(undecided(sel, dict(unknown, token_budget_pressure="LOW")))
+        self.assertFalse(undecided(FixedContext(), unknown))
+        with self.assertRaises(ValueError):
+            default_context_plan("ESCALATE", base)                              # 모르는 이름은 거절
+        spec, m, reg, *_ = world()
+        reader = lambda um, sid, req: {"state": dict(U.snapshot(um, sid)), "record": {"id": "x", "default_action": "KEEP"}}
+        rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")}, context_selector=AdaptiveContext(),
+                     base_context={"budget_chars": 1500}, state_reader=reader)
+        rt.open_session("s", {"token_budget": 300, "context_budget": 200})
+        first = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})["decision"]
+        second = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})["decision"]
+        self.assertEqual(first["context_policy"]["version"], "ctx-fixed-1")      # 처음엔 압력을 몰라 기본 결정
+        self.assertIn("기본 결정 KEEP", first["context_policy"]["reasons"][0])
+        self.assertEqual(second["context_policy"]["version"], "ctx-adaptive-1")  # 압력을 알면 선택기 그대로
+        self.assertTrue(replay(json.loads(json.dumps(first)))["ok"])
+
     def test_two_argument_readers_still_work(self):
         spec, m, reg, *_ = world()
         rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")},
@@ -562,8 +618,9 @@ class QueryThroughDecisionContext(unittest.TestCase):
         rows = {r["id"]: r for r in reader.last.rows("fleet")}
         self.assertIsNone(rows["srv04"]["temp_c"])                             # DC 가 낡은 값을 막았다
         self.assertEqual(rows["srv03"]["temp_c"], 84.0)
-        with self.assertRaises(ValueError):                                     # DC 요청 질의는 아직 allow_stale 을 못 받는다
-            reader(rt.um, "session:s", {"queries": [dict(spec["queries"][1], allow_stale=True)]})
+        out = reader(rt.um, "session:s", {"queries": [dict(spec["queries"][1], allow_stale=True)]})   # CMD-D13: 질의가 allow_stale 을 받는다
+        row = next(r for r in out["queries"]["fleet"]["rows"] if r["id"] == "srv04")
+        self.assertEqual(row["props"]["temp_c"], [66.0, "STALE"])                 # 명시하면 낡은 값과 STALE 이 온다
 
 
 class StateReaderSeam(unittest.TestCase):
@@ -843,9 +900,9 @@ class ContextRuntimeBoundary(unittest.TestCase):
         out = None
         for _ in range(3):
             out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
-        self.assertEqual(out["decision"]["cr"], "cr-2")
+        self.assertEqual(out["decision"]["cr"], "cr-3")
         for c in out["result"]["calls"]:
-            self.assertEqual(c["cd"]["cr"], "cr-2")
+            self.assertEqual(c["cd"]["cr"], "cr-3")
             self.assertEqual(len(c["cd"]["prefix_hash"]), 12)
             self.assertIn("stats", c["cd"])
         self.assertTrue(replay(out["decision"])["ok"])
@@ -1219,8 +1276,10 @@ class Harness(unittest.TestCase):
         plain = evaluate(os.path.join(ROOT, "eval", "tasks", "datacenter.json"), {"claude": "sim-claude"}, ("D", "G"),
                          reps=1, log=lambda *a: None)
         key = lambda r: (r["config"], r["task"])
-        plans = lambda rows: {key(r): (r["context_plan"], r["prompt_plan"], r["success"]) for r in rows}
-        self.assertEqual(plans(rep["rows"]), plans(plain["rows"]))
+        seen = lambda rows: {key(r): (r["input_tokens"], r["prompt_plan"], r["success"], r["executed"]) for r in rows}
+        self.assertEqual(seen(rep["rows"]), seen(plain["rows"]))          # LLM 이 본 글(모의 토큰) · 성공 · 행동이 같다
+        firsts = [r for r in rep["rows"] if r["context_plan"][0].startswith("기본 결정")]
+        self.assertTrue(firsts and all(r["context_version"] == "ctx-fixed-1" for r in firsts))   # BD-76: 모를 때는 DC 의 기본 결정
 
     def test_interleaved_order(self):
         from ms.eval import evaluate

@@ -40,7 +40,7 @@ from .cr import VERSION as CR_VERSION, ContextRuntime
 from .pipeline import Pipeline
 from . import l0
 from .decision_record import DecisionRecord
-from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt
+from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt, default_context_plan, undecided
 from .run_telemetry import RunRecord, cost_of
 from .tools import RETRIEVE
 
@@ -106,6 +106,11 @@ class Runtime:
             raise KeyError(f"세션 {request['session']} 이 열리지 않았다(open_session)")
         state, source, supplied = self._read_state(sid, request)
         plan = ContextRuntime.plan(state, self.ctx_sel, self.prompt_sel, self.base_context, self.prompt_layout)
+        action = source.get("default_action")
+        if action is not None and undecided(self.ctx_sel, state):
+            # BD-76: 규칙이 정해지지 않으면 결정 문맥이 준 기본 결정. 지금 선택기는 그때 이미 고정과 같은 계획을 내므로
+            # 보이는 맥락은 그대로다(시험) -- 계획 이유와 판본만 기본 결정으로 남는다
+            plan["context_policy"] = default_context_plan(action, self.base_context)
         cplan, pplan = plan["context_policy"], plan["prompt_policy"]
         choice = self.provider_policy.select(state, request)
         provider = self.providers[choice["provider"]]
