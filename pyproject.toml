@@ -11,9 +11,8 @@ requires-python = ">=3.10"
 # action 계약 · 명세 · 술어 한 벌 · 실행기(BD-108 · BD-111). 필수 의존이다 -- 커밋 sha 로 고정한다(guard · health 와 같은 sha)
 dependencies = ["action-contract @ git+https://github.com/cogito5170/action@3995fdb3ba487f31d841d3e11b710e64f0d523db"]
 
-[project.optional-dependencies]
-# 선택 의존 -- MS 는 Sensor 를 import 하지 않는다(계약은 sense() 출력의 데이터 꼴). 깔면 sense() 를 바로 부를 수 있을 뿐이다
-sensor = ["llmsensor @ git+https://github.com/cogito5170/Sensor"]
+# Sensor extras 는 두지 않는다(CMD-M27 · BD-123) -- MS 는 Sensor 를 import 하지 않고(BD-46) 상태는 DC 로 온다. sha 없는 extras 는
+# 고정된 Sensor 와 함께 깔 때 ResolutionImpossible 을 냈다. 함께 쓰려면 rlo-SDK `[sensor]` 또는 고정된 Sensor 를 따로 깐다
 
 [project.scripts]
 ms = "ms.cli:main"

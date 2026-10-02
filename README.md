@@ -24,7 +24,7 @@ Telemetry → State → CR(맥락) → Provider → LLM → Arbiter
 > 지금은 에이전트가 MS 안에서 맡고 나중에 독립 계층으로 옮긴다. 역할 기록 [`docs/역할.md`](docs/역할.md) · 앞으로의 계획 [`docs/계획.md`](docs/계획.md).
 
 > **Sensor 배선(②, 2026-10-02)**: `ms/sensing.py` 가 llmsensor 의 `sense()` 출력을 텔레메트리 신호로만 편다 -- 측정 · 관측 · 잔차는
-> 수만 받고, Sensor 의 추정(Q) · 판정은 받지 않는다. `pip install ".[sensor]"` 로 Sensor 를 함께 깔 수 있다(선택).
+> 수만 받고, Sensor 의 추정(Q) · 판정은 받지 않는다. Sensor 와 함께 쓰려면 rlo-SDK `[sensor]` 또는 고정된 Sensor(`llmsensor @ git+…/Sensor@<sha>`)를 따로 깐다 -- MS 에는 Sensor extras 가 없다(CMD-M27 · BD-123).
 > **질의도 결정 문맥을 거친다(PC-23, cr-2)**: `state_reader` 가 인자를 셋 받으면 요청을 넘기고, 리더가 질의 결과(`queries`)를 돌려주면
 > CR 은 그래프에 직접 묻지 않고 그것으로 맥락을 짓는다. **낡은 값은 LLM 에 안 간다**(BD-65): 값은 null · `_unusable`. 질의에
 > `allow_stale: true` 를 명시할 때만 값과 `_stale` 표시를 보인다(지금 그렇게 하는 질의는 없다).
