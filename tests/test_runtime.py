@@ -1570,9 +1570,12 @@ class ActionIntentShadow(unittest.TestCase):
             self.skipTest("옆에 DC 가 없다(MS_DC_PATH)")
         from ms.eval import dc_state_reader
         Reader, _ = dc_state_reader()
+        from unittest import mock
         with tempfile.TemporaryDirectory() as tmp:
             ledger = os.path.join(tmp, "runs.jsonl")
-            spec, rt = self._rt(ledger_path=ledger)
+            with mock.patch.dict(sys.modules, {"guard": None}):     # 의도만 본다 -- guard 가 길에 있어도 끈다(CMD-M18)
+                spec, rt = self._rt(ledger_path=ledger)
+            self.assertIsNone(rt.guard)
             rt.state_reader = Reader(rt.um, rt.m)
             out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
             with open(ledger, encoding="utf-8") as fh:
