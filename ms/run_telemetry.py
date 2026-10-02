@@ -21,7 +21,8 @@
     inference_ms        provider 호출 시간의 합(네트워크 포함, 또는 provider 가 보고한 값)
     total_ms            요청 하나의 벽시계(맥락 짓기 · 중재 · 도구 포함)
     retries             첫 판 뒤에 **DENY 나 못 읽은 제안 때문에** 다시 돈 판 수(RETRIEVE 는 재시도가 아니다)
-    task_success        과업의 성공 기준을 준 사람(평가)이 채운다. 아니면 None -- LLM 이 판정하지 않는다
+    task_success        실행 기록에서는 **늘 None** 이다(ms-run-telemetry-4, PC-13). 판정은 성공 기준을 가진 쪽(평가 하니스)이 하고
+                        원장에 따로 `{"kind": "evaluation", "run_id", "task_success"}` 줄로 남는다 -- Runtime 도 LLM 도 판정하지 않는다
     user_correction     사람이 고쳤나. 피드백이 올 때 따로 들어온다. 아니면 None
     tool_success        도구를 돌렸으면 그 결과가 tool_error 없이 들어왔나. 안 돌렸으면 None
 
@@ -33,7 +34,8 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 
-SCHEMA_VERSION = "ms-run-telemetry-3"     # 1 -> 2: walp_* 칸을 arbiter_* 로 · 2 -> 3 (2026-10-02): policy 칸을 결정 기록으로 떼고 decision_ref 만
+SCHEMA_VERSION = "ms-run-telemetry-4"     # 1 -> 2: walp_* 칸을 arbiter_* 로 · 2 -> 3 (2026-10-02): policy 칸을 결정 기록으로 떼고 decision_ref 만
+                                         # 3 -> 4 (2026-10-02, PC-13): task_success 를 Runtime 이 채우지 않는다(판정은 원장의 evaluation 줄)
 
 # OpenTelemetry GenAI 이름과의 짝(내보낼 때). 짝이 없는 칸은 MS 고유다
 OTEL = {"run.provider": "gen_ai.provider.name", "run.model": "gen_ai.request.model",

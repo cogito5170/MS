@@ -133,7 +133,7 @@ run          run_id · session_id · provider · model · timestamp · simulated
 tokens       input_tokens · output_tokens · cached_input_tokens · context_tokens* · retrieved_tokens* · total_tokens
 latency      ttft_ms (스트리밍일 때만) · inference_ms · total_ms
 interaction  llm_calls · tool_calls · retries · context_retrievals · arbiter_denies · proposal_invalid · non_progress_rounds
-outcome      task_success (그래프로 판정, 기준이 없으면 None) · user_correction (피드백으로) · tool_success
+outcome      task_success (Runtime 은 채우지 않는다 -- 평가 하니스가 그래프로 판정해 evaluation() 으로 돌려준다, PC-13) · user_correction (피드백으로) · tool_success
 decision_ref 이 실행을 낸 결정 기록의 id ← 결정의 내용은 여기 없다(아래)
 cost         usd · source (provider | price_table | None)
 estimated    * 추정한 칸과 방법        unsupported  못 해서 안 보낸 옵션        extensions  provider 고유 값

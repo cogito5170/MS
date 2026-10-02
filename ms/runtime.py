@@ -18,7 +18,9 @@ MS 는 provider 가 아니다. 추론은 provider 가 하고, MS 는 그 위에�
 MS 는 그 패키지를 import 하지 않는다. 받은 `state` 는 사용 상태 이름(STATES)과 스칼라 값만 허락한다 -- 원 측정 · 객체를 정책 쪽으로
 몰래 넣지 못한다. `record`(예: 결정 문맥의 id · digest)는 **결정 기록**(`DecisionRecord.state_source`)에 남는다 -- 실행 기록(텔레메트리)이 아니다.
 
-성공 판정(`success` · `forbidden` · `expect_noop`)을 요청에 주면 실행 뒤 **그래프**를 보고 채운다. LLM 의 말로 판정하지 않는다.
+**과업 성공은 Runtime 이 판정하지 않는다**(baseline PC-13 · BV-10). 판정은 성공 기준을 가진 쪽(평가 하니스 `ms.eval.judge`)의 일이다.
+Runtime 은 요청의 `success` · `forbidden` · `expect_noop` 을 읽지 않고, 실행 기록의 `task_success` 는 None 으로 둔다. 판정한 쪽이
+`evaluation(run_id, task_success)` 로 돌려주면 그것을 사람의 고침(`feedback`)처럼 **바깥에서 온 결과 관측**으로 넣는다.
 """
 from __future__ import annotations
 
@@ -26,7 +28,6 @@ import itertools
 import json
 import time
 
-from . import predicate
 from . import usage_model as U
 from .arbiter import DENY, Arbiter
 from .cr import VERSION as CR_VERSION, ContextRuntime
@@ -38,22 +39,6 @@ from .run_telemetry import RunRecord, cost_of
 from .tools import RETRIEVE
 
 _ids = itertools.count(1)
-
-
-def check_success(manager, request: dict, executed: list):
-    """과업의 성공 기준을 **최종 상태 그래프**로 본다. 기준이 없으면 None."""
-    if not any(k in request for k in ("success", "forbidden", "expect_noop")):
-        return None
-    tools = [e["tool"] for e in executed]
-    if any(t in (request.get("forbidden") or []) for t in tools):
-        return False
-    if request.get("expect_noop") and tools:
-        return False
-    for ent, prop, *rest in request.get("success") or []:
-        node = manager.graph.nodes.get(ent)
-        if node is None or not predicate.holds([prop, *rest], node.values()):
-            return False
-    return True
 
 
 class Runtime:
@@ -146,6 +131,19 @@ class Runtime:
         self._ledger({"kind": "feedback", "run_id": run_id, "user_correction": bool(user_correction)})
         return r
 
+    def evaluation(self, run_id: str, task_success: bool):
+        """성공 기준을 가진 쪽(평가 하니스)이 그 실행을 판정한 결과. Runtime 은 판정하지 않고 받아 넣기만 한다 --
+        answer_reliability 상태가 여기서 나온다. 한 실행에 한 번만."""
+        rec = self.records[run_id]
+        if rec.outcome.get("task_success") is not None:
+            raise ValueError(f"{run_id} 는 이미 판정을 받았다")
+        rec.outcome["task_success"] = bool(task_success)
+        sid = U.session_id(rec.run["session_id"])
+        r = self.um.ingest({"source": "evaluation", "entity": sid, "signal": "outcome.task_success",
+                            "value": bool(task_success), "ts": self.um.clock(), "meta": {"run_id": run_id}})
+        self._ledger({"kind": "evaluation", "run_id": run_id, "task_success": bool(task_success)})
+        return r
+
     # -- 기록 ---------------------------------------------------------------------------------------------------
     def _record(self, request, sid, state, cplan, pplan, choice, provider, res, total_ms,
                 run_id, state_source=None) -> "tuple[DecisionRecord, RunRecord]":
@@ -208,7 +206,7 @@ class Runtime:
             interaction={"llm_calls": len(calls), "tool_calls": len(res.executed), "retries": retries,
                          "context_retrievals": retrievals, "arbiter_denies": denies, "proposal_invalid": invalid,
                          "non_progress_rounds": denies + retrievals},
-            outcome={"task_success": check_success(self.m, request, res.executed), "user_correction": None,
+            outcome={"task_success": None, "user_correction": None,          # 판정은 evaluation() 으로 바깥에서
                      "tool_success": tool_ok},
             decision_ref=dec.id,
             cost=cost,

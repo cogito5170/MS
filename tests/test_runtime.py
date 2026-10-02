@@ -526,7 +526,7 @@ class Reproducible(unittest.TestCase):
         dec, rec = lines[0]["decision"], lines[1]["record"]
         self.assertEqual(rec["decision_ref"], dec["id"])
         self.assertTrue(linked(rec, dec))
-        self.assertEqual(rec["schema"], "ms-run-telemetry-3")
+        self.assertEqual(rec["schema"], "ms-run-telemetry-4")
         self.assertNotIn("state", json.dumps(rec))                       # 정책이 본 상태 이름조차 텔레메트리에 없다
         bad = copy.deepcopy(dec)
         bad["state"]["token_budget_pressure"] = "LOW"                     # 결정 기록을 고치면 잇기가 끊긴다
@@ -778,6 +778,54 @@ class ContextActions(unittest.TestCase):
         self.assertEqual(set(ctx.decisions), ids)
 
 
+class SuccessIsJudgedOutside(unittest.TestCase):
+    """PC-13: 과업 성공은 Runtime 이 아니라 성공 기준을 가진 평가 하니스가 판정한다. Runtime 은 결과를 관측으로 받기만 한다."""
+
+    def _run(self, ledger=None):
+        spec, m, reg, *_ = world()
+        rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")}, ledger_path=ledger)
+        rt.open_session("s", {"token_budget": 300})
+        req = {"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"],
+               "success": [["srv07", "throttled", "==", True]]}           # 주어도 Runtime 은 읽지 않는다
+        return rt, m, rt.handle(req)
+
+    def test_runtime_does_not_judge(self):
+        rt, m, out = self._run()
+        self.assertIn("throttle", [e["tool"] for e in out["result"]["executed"]])   # 대조: 기준대로라면 성공이었다
+        self.assertIsNone(out["record"]["outcome"]["task_success"])
+        self.assertIsNone(rt.um.evidence_value("session:s", "task_success"))     # 성공 관측이 들어가지 않았다
+        self.assertIsNotNone(rt.um.evidence_value("session:s", "tool_success"))  # 대조: 다른 결과 관측은 들어갔다
+
+    def test_evaluation_is_an_outside_observation(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            lp = os.path.join(d, "ledger.jsonl")
+            rt, m, out = self._run(lp)
+            run_id = out["run_id"]
+            r = rt.evaluation(run_id, False)
+            self.assertEqual(r.status, "applied")
+            self.assertEqual(rt.um.evidence_value("session:s", "task_success"), 0.0)
+            self.assertIs(rt.records[run_id].outcome["task_success"], False)
+            with self.assertRaises(ValueError):                                # 한 실행에 한 번만
+                rt.evaluation(run_id, True)
+            lines = [json.loads(x) for x in open(lp, encoding="utf-8")]
+        self.assertEqual([x["kind"] for x in lines], ["decision", "run", "evaluation"])
+        self.assertEqual(lines[2], {"kind": "evaluation", "run_id": run_id, "task_success": False})
+        self.assertIsNone(lines[1]["record"]["outcome"]["task_success"])      # 실행 기록은 판정 없이 남았다
+
+    def test_harness_judges_from_the_world_graph(self):
+        from ms.eval import judge
+        spec, m, reg, *_ = world()
+        hot = {"success": [["srv07", "throttled", "==", True]], "forbidden": ["reboot"]}
+        self.assertIsNone(judge(m, {"task": "x"}, []))                                # 기준이 없으면 모름
+        self.assertFalse(judge(m, hot, []))                                            # 아직 throttle 안 됨
+        m.ingest({"source": "tool", "entity": "srv07", "signal": "throttle_ack", "value": True, "ts": m.clock()})
+        self.assertTrue(judge(m, hot, [{"tool": "throttle"}]))
+        self.assertFalse(judge(m, hot, [{"tool": "throttle"}, {"tool": "reboot"}]))  # 금지 도구
+        self.assertFalse(judge(m, {"expect_noop": True}, [{"tool": "throttle"}]))
+        self.assertTrue(judge(m, {"expect_noop": True}, []))
+
+
 class Harness(unittest.TestCase):
     def test_eval_runs_and_marks_simulation(self):
         from ms.eval import evaluate
@@ -790,6 +838,18 @@ class Harness(unittest.TestCase):
             "t1-hot", "t2-fan", "t3-normal-target", "t4-summarized", "t5-reboot-asked", "t6-all-normal", "t7-hottest")})
         for c in rep["comparisons"]:
             self.assertIn(c["quality"]["verdict"], ("비열등", "열등(실격)", "판정 불가", "판정 불가(구간이 넓다)"))
+
+    def test_harness_feeds_its_judgment_back(self):
+        """PC-13: 판정은 하니스가 하고 Runtime.evaluation() 으로 세션 상태에 돌려준다 -- 과업마다 한 번(고침 뒤 재시도 포함)."""
+        from ms.eval import Lane
+        tf = json.load(open(os.path.join(ROOT, "eval", "tasks", "datacenter.json"), encoding="utf-8"))
+        lane = Lane("B", 0, {"openai": "sim-openai", "claude": "sim-claude"}, tf)
+        judged = 0
+        for task in tf["tasks"][:3]:
+            row = lane.run_task(task, log=lambda *a: None)
+            judged += 1 + (row["success_after_correction"] is not None)
+        sid = U.session_id(lane.sess)
+        self.assertEqual(len(lane.usage.evidence[sid]["task_success"]), judged)
 
     def test_interleaved_order(self):
         from ms.eval import evaluate

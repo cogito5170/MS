@@ -13,7 +13,8 @@ provider 자리에 무엇을 꽂을지는 부르는 쪽이 정한다(`openai:<�
 한 칸 · 한 반복 = 한 세션. 과업을 파일 순서대로 돌고, **과업마다 세계를 새로 짓는다**(앞 과업의 도구 결과가 뒤 과업의 성공을
 대신 만들지 않게). 세션의 사용 상태는 과업을 건너 이어진다 -- 적응 정책은 그것을 본다.
 
-성공은 최종 상태 그래프로 판정한다. 실패하고 과업에 `correction` 이 있으면 **모의 사용자**가 한 번 고친다: 피드백(user_correction=True)
+성공은 **이 하니스가** 최종 상태 그래프로 판정한다(`judge`). Runtime 은 판정하지 않는다(PC-13) -- 판정을 `Runtime.evaluation()` 으로
+돌려주면 세션의 사용 상태가 그것을 관측으로 받는다. 실패하고 과업에 `correction` 이 있으면 **모의 사용자**가 한 번 고친다: 피드백(user_correction=True)
 을 넣고, 과업 글에 고침을 붙여 새 세계에서 다시 돈다(success_after_correction). 성공하면 피드백 False 를 넣는다 -- 그래야
 correction_rate 상태가 "모름" 에서 벗어난다.
 
@@ -27,6 +28,7 @@ import random
 import statistics
 import time
 
+from . import predicate
 from .cli import load
 from .policy import AdaptiveContext, AdaptivePrompt, FixedContext, FixedPrompt
 from .providers import make_provider
@@ -48,6 +50,22 @@ def parse_slot(spec: str):
     """'openai:gpt-x' -> ('openai', 'gpt-x'), 'claude-cli' -> ('claude-cli', None)."""
     name, _, model = spec.partition(":")
     return name, (model or None)
+
+
+def judge(world, task: dict, executed: list):
+    """과업의 성공 기준을 **최종 상태 그래프**로 본다. 기준이 없으면 None. LLM 의 말은 보지 않는다."""
+    if not any(k in task for k in ("success", "forbidden", "expect_noop")):
+        return None
+    tools = [e["tool"] for e in executed]
+    if any(t in (task.get("forbidden") or []) for t in tools):
+        return False
+    if task.get("expect_noop") and tools:
+        return False
+    for ent, prop, *rest in task.get("success") or []:
+        node = world.graph.nodes.get(ent)
+        if node is None or not predicate.holds([prop, *rest], node.values()):
+            return False
+    return True
 
 
 def _world(tasks_file: dict, task: dict):
@@ -84,13 +102,14 @@ class Lane:
                 self.opened = True
             text = task["task"] if attempt == 0 else f"{task['task']}\n사용자 고침: {task['correction']}"
             pre = f"run {self.fresh}/{self.letter}-r{self.rep}/{task['id']}/{attempt}" if self.fresh else ""
-            req = {"session": self.sess, "task": text, "queries": task.get("queries") or spec["queries"], "preamble": pre,
-                   **{k: task[k] for k in ("success", "forbidden", "expect_noop") if k in task}}
+            req = {"session": self.sess, "task": text, "queries": task.get("queries") or spec["queries"], "preamble": pre}
             out = rt.handle(req)
             rec = out["record"]
-            ok = rec["outcome"]["task_success"]
+            ok = judge(world, task, out["result"]["executed"])
+            if ok is not None:
+                rt.evaluation(rec["run"]["run_id"], ok)
             if attempt == 0:
-                row = _row(self.letter, self.rep, task, rec, out["decision"], out["result"])
+                row = _row(self.letter, self.rep, task, rec, out["decision"], out["result"], ok)
                 log(f"  {self.letter} r{self.rep} {task['id']:<18} {'성공' if ok else '실패'} "
                     f"in={rec['tokens']['input_tokens']} 캐시={rec['tokens']['cached_input_tokens']} "
                     f"ms={rec['latency']['total_ms']:.0f} arbiter={out['decision']['arbiter_decision']['all']}")
@@ -131,12 +150,12 @@ def run_all(configs, slots, tasks_file, reps, provider_kw=None, order="interleav
     return rows_by
 
 
-def _row(letter, rep, task, rec, dec, result) -> dict:
+def _row(letter, rep, task, rec, dec, result, ok) -> dict:
     decisions = dec["arbiter_decision"]["all"]
     st = dec["state"]
     rats = [len(r["proposal"].get("rationale") or "") for r in result["rounds"] if "proposal" in r]
     prefixes = sorted({c["cd"]["prefix_hash"] for c in result["calls"] if c.get("cd")})
-    return {"config": letter, "rep": rep, "task": task["id"], "success": rec["outcome"]["task_success"],
+    return {"config": letter, "rep": rep, "task": task["id"], "success": ok,
             "user_correction": False, "success_after_correction": None,
             "forbidden_executed": any(e["tool"] in (task.get("forbidden") or []) for e in result["executed"]),
             "input_tokens": rec["tokens"]["input_tokens"], "output_tokens": rec["tokens"]["output_tokens"],
@@ -149,7 +168,7 @@ def _row(letter, rep, task, rec, dec, result) -> dict:
             "retries": rec["interaction"]["retries"], "tool_calls": rec["interaction"]["tool_calls"],
             "retrievals": rec["interaction"]["context_retrievals"], "llm_calls": rec["interaction"]["llm_calls"],
             "denies": rec["interaction"]["arbiter_denies"], "cost_usd": rec["cost"]["usd"],
-            "recovered": bool(rec["outcome"]["task_success"]) if any(v == "DENY" for v, _ in decisions) else None,
+            "recovered": bool(ok) if any(v == "DENY" for v, _ in decisions) else None,
             "state_known": any(v is not None for k, v in st.items() if k != "model_version"),
             "context_plan": dec["context_policy"]["reasons"], "prompt_plan": dec["prompt_policy"]["reasons"],
             "unsupported": rec["unsupported"], "outcome": result["outcome"], "simulated": rec["run"]["simulated"],
