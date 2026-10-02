@@ -135,6 +135,7 @@ def _row(letter, rep, task, rec, result) -> dict:
     decisions = rec["policy"]["walp_decision"]["all"]
     st = rec["policy"]["state"]
     rats = [len(r["proposal"].get("rationale") or "") for r in result["rounds"] if "proposal" in r]
+    prefixes = sorted({c["cd"]["prefix_hash"] for c in result["calls"] if c.get("cd")})
     return {"config": letter, "rep": rep, "task": task["id"], "success": rec["outcome"]["task_success"],
             "user_correction": False, "success_after_correction": None,
             "forbidden_executed": any(e["tool"] in (task.get("forbidden") or []) for e in result["executed"]),
@@ -152,7 +153,7 @@ def _row(letter, rep, task, rec, result) -> dict:
             "state_known": any(v is not None for k, v in st.items() if k != "model_version"),
             "context_plan": rec["policy"]["context_policy"]["reasons"], "prompt_plan": rec["policy"]["prompt_policy"]["reasons"],
             "unsupported": rec["unsupported"], "outcome": result["outcome"], "simulated": rec["run"]["simulated"],
-            "rationale_chars": _mean(rats), "prompt_template": rec["policy"]["prompt_policy"].get("template"),
+            "rationale_chars": _mean(rats), "prefix_hashes": prefixes, "prompt_template": rec["policy"]["prompt_policy"].get("template"),
             "instruction_mode": rec["policy"]["prompt_policy"]["plan"]["instruction_mode"]}
 
 
@@ -179,7 +180,8 @@ def summarize(rows: list) -> dict:
             "tool_calls": sum(r["tool_calls"] for r in rows), "retrievals": sum(r["retrievals"] for r in rows),
             "walp_deny_rate": (sum(r["denies"] for r in rows) / calls) if calls else None,
             "walp_recovery_rate": _mean([float(r["recovered"]) for r in with_deny]),
-            "runs_with_deny": len(with_deny)}
+            "runs_with_deny": len(with_deny),
+            "distinct_prefixes": len({h for r in rows for h in r.get("prefix_hashes") or []})}
 
 
 def _per_task(rows, metric):

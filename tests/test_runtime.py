@@ -604,6 +604,54 @@ class CacheStableLayout(unittest.TestCase):
         self.assertEqual(rec["policy"]["prompt_policy"]["template"], "prompt-text-3")
 
 
+class ContextRuntimeBoundary(unittest.TestCase):
+    """CR 이 맥락 · 프롬프트를 짓는 유일한 자리다 -- 나중에 CR 을 독립 계층으로 옮길 때 끊을 곳이 하나여야 한다."""
+
+    def test_only_cr_builds_context_and_prompt(self):
+        for f in ("pipeline.py", "runtime.py", "eval.py", "cli.py", "arbiter.py"):
+            src = read(os.path.join(ROOT, "ms", f))
+            self.assertNotIn("PromptPolicy(", src, f)
+            self.assertNotIn("prompt_policy.build(", src, f)
+            self.assertNotIn("policy.build(", src, f)
+            self.assertNotIn("tool_query(", src, f)
+
+    def test_every_call_carries_a_decision_record(self):
+        spec, m, reg, *_ = world()
+        rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")}, context_selector=AdaptiveContext(),
+                     prompt_selector=AdaptivePrompt())
+        rt.open_session("s", {"token_budget": 10, "context_budget": 10})
+        out = None
+        for _ in range(3):
+            out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+        self.assertEqual(out["record"]["policy"]["cr"], "cr-1")
+        for c in out["result"]["calls"]:
+            self.assertEqual(c["cd"]["cr"], "cr-1")
+            self.assertEqual(len(c["cd"]["prefix_hash"]), 12)
+            self.assertIn("stats", c["cd"])
+        self.assertTrue(replay(out["record"]["policy"])["ok"])
+
+    def test_prefix_hash_tracks_cache_prefix(self):
+        from ms.cr import ContextRuntime
+        hashes = {}
+        for layout in ("stable_prefix", "legacy"):
+            hs = set()
+            for st in CacheStableLayout.STATES:
+                spec, m, reg, *_ = world()
+                plan = ContextRuntime.plan(st, AdaptiveContext(), AdaptivePrompt(), {}, layout)
+                cd = ContextRuntime.from_plan(reg, plan).decide(m, "t", spec["queries"], preamble="run 1")
+                hs.add(cd.record["prefix_hash"])
+            hashes[layout] = hs
+        self.assertEqual(len(hashes["stable_prefix"]), 1)
+        self.assertGreater(len(hashes["legacy"]), 1)                    # 대조
+
+    def test_eval_counts_distinct_prefixes(self):
+        from ms.eval import evaluate
+        rep = evaluate(os.path.join(ROOT, "eval", "tasks", "datacenter.json"), {"claude": "sim-claude"}, ("B", "F"),
+                       reps=1, log=lambda *x: None)
+        self.assertEqual(rep["summary"]["B"]["distinct_prefixes"], 1)
+        self.assertEqual(rep["summary"]["F"]["distinct_prefixes"], 1)    # stable_prefix: 적응해도 앞부분은 하나
+
+
 class ContextActions(unittest.TestCase):
     def _ctx(self, **kw):
         spec, m, reg, *_ = world(budget=100000)

@@ -16,6 +16,10 @@ Telemetry → State → Context/Prompt Policy → Provider → LLM → WALP
 > 고정 정책보다 **품질을 지키면서** 토큰 · 지연 · 재시도 · 비용을 줄이는가? — 안전과 최소 품질은 단단한 제약이다.
 > **아직 답이 없다** (아래 "잰 것").
 
+> **이름 고침(2026-10-02)**: 아래에서 Context Policy · Prompt Policy 라고 부르는 것은 정책이 아니라 **Context Runtime(CR)** 이다 —
+> 매 요청 무엇을 보이고 어떻게 말할지 정하는 런타임이고, 그 결정을 Context Decision(CD)이라 부른다. 코드는 `ms/cr.py` 한 곳으로 모였다.
+> 지금은 에이전트가 MS 안에서 맡고 나중에 독립 계층으로 옮긴다. 역할 기록 [`docs/역할.md`](docs/역할.md) · 앞으로의 계획 [`docs/계획.md`](docs/계획.md).
+
 ## 세 가지를 섞지 않는다
 
 | | 묻는 것 | MS 에서 | 예 |
@@ -202,7 +206,7 @@ python3 -m ms ask ms/examples/datacenter.json --telemetry ms/examples/datacenter
 python3 -m ms ask ... --provider claude --model claude-opus-5-5 --stream     # ANTHROPIC_API_KEY
 python3 -m ms ask ... --provider openai --model <모형>                        # OPENAI_API_KEY (모형 기본값을 지어내지 않는다)
 python3 -m ms ask ... --provider sim-gemini                                   # 모의 -- 배선 확인
-python3 -m unittest tests.test_ms tests.test_runtime                          # 97 개
+python3 -m unittest tests.test_ms tests.test_runtime                          # 101 개
 ```
 
 ```python

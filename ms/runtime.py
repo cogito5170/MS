@@ -24,7 +24,7 @@ import time
 from . import predicate
 from . import usage_model as U
 from .arbiter import DENY, WalpArbiter
-from .context import ContextPolicy
+from .cr import VERSION as CR_VERSION, ContextRuntime
 from .pipeline import Pipeline
 from .policy import BASE_CONTEXT, ExplicitProvider, FixedContext, FixedPrompt
 from .run_telemetry import RunRecord, cost_of
@@ -78,14 +78,14 @@ class Runtime:
         if sid not in self.um.graph.nodes:
             raise KeyError(f"세션 {request['session']} 이 열리지 않았다(open_session)")
         state = U.snapshot(self.um, sid)
-        cplan = self.ctx_sel.plan(state, self.base_context)
-        pplan = dict(self.prompt_sel.plan(state), template=self.template_version, layout=self.prompt_layout)
+        plan = ContextRuntime.plan(state, self.ctx_sel, self.prompt_sel, self.base_context, self.prompt_layout)
+        cplan, pplan = plan["context_policy"], plan["prompt_policy"]
         choice = self.provider_policy.select(state, request)
         provider = self.providers[choice["provider"]]
-        pipe = Pipeline(self.m, self.reg, provider, ContextPolicy(**cplan["params"], version=cplan["version"]),
-                        self.arbiter, prompt_plan=pplan["plan"], model=choice.get("model"),
-                        stream=bool(request.get("stream")), tool_mode=request.get("tool_mode", "text"),
-                        prompt_layout=self.prompt_layout, preamble=request.get("preamble", ""))
+        pipe = Pipeline(self.m, self.reg, provider, None, self.arbiter,
+                        model=choice.get("model"), stream=bool(request.get("stream")),
+                        tool_mode=request.get("tool_mode", "text"), preamble=request.get("preamble", ""),
+                        cr=ContextRuntime.from_plan(self.reg, plan))
         res = pipe.run(request["task"], request.get("queries", ()), max_rounds=request.get("max_rounds", self.max_rounds))
         total_ms = (self.wall() - t0) * 1000
         rec = self._record(request, sid, state, cplan, pplan, choice, provider, res, total_ms)
@@ -165,7 +165,8 @@ class Runtime:
                          "non_progress_rounds": denies + retrievals},
             outcome={"task_success": check_success(self.m, request, res.executed), "user_correction": None,
                      "tool_success": tool_ok},
-            policy={"state": state, "context_policy": cplan, "prompt_policy": pplan, "provider_policy": choice,
+            policy={"cr": CR_VERSION, "state": state, "context_policy": cplan, "prompt_policy": pplan,
+                    "provider_policy": choice,
                     "walp_decision": {"final": final, "all": [[d["verdict"], d["rule"]] for d in decisions]},
                     "inputs": {"base_context": self.base_context, "default_provider": self.provider_policy.default
                                if isinstance(self.provider_policy, ExplicitProvider) else None}},

@@ -2,9 +2,8 @@
 
 판(round)마다:
 
-    1. STATE QUERY 를 **지금 그래프에** 돌리고 TOOL QUERY 로 쓸 수 있는 도구를 고른다
-    2. CONTEXT POLICY 가 최소 맥락을 짓는다(직전에 retrieve 로 청한 행 · 직전에 막힌 까닭을 함께)
-    3. PROMPT POLICY 가 CanonicalPrompt 를 짓는다(도구는 좁히기만)
+    1-3. CR(Context Runtime)이 결정(CD)을 짓는다: STATE QUERY · TOOL QUERY 를 **지금 그래프에** 돌리고, 최소 맥락
+         (직전에 retrieve 로 청한 행 · 직전에 막힌 까닭을 함께)과 CanonicalPrompt(도구는 좁히기만)를 낸다
     4. PROVIDER ADAPTER 가 provider 의 요청으로 바꿔 부르고, 응답을 CanonicalResponse 로 정규화한다
     5. 응답은 **제안(Proposal)** 이 된다 -- 함수 호출 응답이어도 실행이 아니다
     6. WALP ARBITER 가 판정한다
@@ -28,10 +27,10 @@ from dataclasses import dataclass, field
 from .arbiter import DENY, NOOP, WalpArbiter
 from .canonical import CanonicalRequest
 from .context import ContextPolicy
+from .cr import ContextRuntime
 from .llm import proposal_from
-from .prompt import PromptPolicy, plan_inference
+from .prompt import plan_inference
 from .providers import CallableProvider, LLMProvider
-from .query import StateQuery, run_query, tool_query
 from .telemetry import Telemetry
 from .tools import RETRIEVE
 
@@ -50,43 +49,38 @@ class RunResult:
 
 
 class Pipeline:
+    """CR(Context Runtime)이 지은 결정(CD)을 provider 에 넘기고, 제안을 WALP 로 판정하고, ALLOW 면 도구를 부른다.
+    맥락 · 프롬프트를 여기서 짓지 않는다 -- `self.cr.decide()` 만 부른다."""
+
     def __init__(self, manager, registry, llm, policy: "ContextPolicy | None" = None,
                  arbiter: "WalpArbiter | None" = None, retrieve_max: int = 20, prompt_plan: "dict | None" = None,
                  model: "str | None" = None, stream: bool = False, tool_mode: str = "text",
-                 prompt_layout: "str | None" = None, preamble: str = ""):
+                 prompt_layout: "str | None" = None, preamble: str = "", cr: "ContextRuntime | None" = None):
         self.m, self.reg = manager, registry
         self.provider = llm if isinstance(llm, LLMProvider) else CallableProvider(llm)
         self.llm = llm
-        self.policy = policy or ContextPolicy()
+        self.cr = cr or ContextRuntime(registry, policy, prompt_plan, prompt_layout, retrieve_max)
+        self.policy, self.prompt_plan, self.retrieve_max = self.cr.policy, self.cr.prompt_plan, self.cr.retrieve_max
         self.arbiter = arbiter or WalpArbiter(registry, clock=manager.clock)
-        self.retrieve_max = retrieve_max
-        self.prompt_policy = PromptPolicy(prompt_layout) if prompt_layout else PromptPolicy()
-        self.prompt_plan, self.preamble = prompt_plan, preamble
+        self.preamble = preamble
         self.model, self.stream, self.tool_mode = model, stream, tool_mode
 
     def context(self, task, queries, retrieved_ids=(), denied=()):
-        qs = [q if isinstance(q, StateQuery) else StateQuery.from_dict(q) for q in queries]
-        results = [run_query(q, self.m) for q in qs]
-        retrieved = []
-        if retrieved_ids:
-            rq = run_query(StateQuery("retrieved", ids=list(retrieved_ids), limit=self.retrieve_max), self.m)
-            retrieved = rq.rows
-            results = results + [rq]          # 청한 행에도 도구를 고를 수 있게
-        offers = tool_query(self.reg, results, self.m)
-        return self.policy.build(task, [r for r in results if r.name != "retrieved"], offers, retrieved, denied)
+        """최소 맥락만(진단 · `ms context` 용). 판마다의 결정은 run() 이 cr.decide() 로 짓는다."""
+        return self.cr.minimal_context(self.m, task, queries, retrieved_ids, denied)
 
-    def _call(self, ctx):
-        prompt = self.prompt_policy.build(ctx, self.prompt_plan, self.preamble)
+    def _call(self, cd):
+        prompt = cd.prompt
         req = CanonicalRequest(self.model or self.provider.model, prompt, plan_inference(self.prompt_plan or {}),
                                self.tool_mode, self.stream and self.provider.supports_stream)
         resp = self.provider.collect(req) if req.stream else self.provider.generate(req)
         full = prompt.text()
         ctx_text = prompt.context_text()
-        retrieved = [r.payload() for q, r in ctx.kept if q == "retrieved"]
+        retrieved = [r.payload() for q, r in cd.ctx.kept if q == "retrieved"]
         info = {"provider": resp.provider, "model": resp.model, "finish": resp.finish,
                 "usage": resp.to_dict()["usage"], "ttft_ms": resp.ttft_ms, "inference_ms": resp.inference_ms,
                 "cost_usd": resp.cost_usd, "unsupported": resp.unsupported + prompt.notes,
-                "extensions": resp.extensions,
+                "extensions": resp.extensions, "cd": cd.record,
                 "prompt_chars": len(full), "context_chars": len(ctx_text),
                 "retrieved_chars": len(json.dumps(retrieved, ensure_ascii=False, separators=(",", ":"))) if retrieved
                 else 0, "native_tool_calls": len(resp.tool_calls)}
@@ -96,11 +90,12 @@ class Pipeline:
         res = RunResult()
         retrieved, denied = [], []
         for i in range(max_rounds):
-            ctx = self.context(task, queries, retrieved, denied)
+            cd = self.cr.decide(self.m, task, queries, retrieved, denied, self.preamble)
+            ctx = cd.ctx
             rnd = {"round": i + 1}
             res.rounds.append(rnd)
             try:
-                resp, info = self._call(ctx)
+                resp, info = self._call(cd)
             except Exception as e:
                 rnd["context"] = ctx.stats()
                 rnd["llm_error"] = f"{type(e).__name__}: {e}"
