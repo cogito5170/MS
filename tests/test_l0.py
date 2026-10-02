@@ -44,6 +44,20 @@ class WithoutL0(unittest.TestCase):
             with self.assertRaises(ImportError):            # 달라고 했는데 없으면 조용히 버리지 않는다
                 Runtime(m, reg, {"sim-claude": make_provider("sim-claude")}, l0_ledger="x.jsonl")
 
+    def test_null_recorder_action_has_recorder_signature_and_does_nothing(self):
+        """CMD-T17: 실행기 길(action.*)도 L0 없이 같은 코드로 돈다. 서명이 Recorder.action 과 같다."""
+        import inspect
+        r = l0.recorder("r")
+        self.assertIsInstance(r, l0.NullRecorder)
+        with r.action("THROTTLE", decision_ref="dec-x", target="srv07", action_ref="cmd-x", args={"pct": 50}) as a:
+            a.result(is_error=False, output="ok")
+        if (TELEMETRY / "telemetry").is_dir():
+            if str(TELEMETRY) not in sys.path:
+                sys.path.insert(0, str(TELEMETRY))
+            from telemetry import Recorder
+            self.assertEqual(list(inspect.signature(l0.NullRecorder.action).parameters),
+                             list(inspect.signature(Recorder.action).parameters))
+
     def test_impostor_named_telemetry_is_not_l0(self):
         with mock.patch.dict(sys.modules, {"telemetry": types.ModuleType("telemetry")}):
             self.assertFalse(l0.available())

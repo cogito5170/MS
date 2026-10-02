@@ -71,3 +71,8 @@ class NullRecorder:
     @contextmanager
     def tool(self, *a, **kw):
         yield _Nothing()
+
+    @contextmanager
+    def action(self, action_type, decision_ref=None, target=None, action_ref=None, args=None):
+        """Recorder.action 과 같은 서명(CMD-T17) -- 실행기 길의 계측 자리가 L0 없이도 한 갈래로 남게."""
+        yield _Nothing()
