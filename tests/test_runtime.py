@@ -512,6 +512,19 @@ class Reproducible(unittest.TestCase):
         for r in recs:
             self.assertEqual(replay(json.loads(json.dumps(r)))["ok"], True)
 
+    def test_replay_separates_state_model_versions(self):
+        """PC-03 으로 usage-model 이 3 -> 4. 옛 기록도 정책은 재현되지만 어느 판본의 상태 위였는지 갈린다."""
+        new = json.loads(json.dumps(self._records()[-1]))
+        r = replay(new)
+        self.assertEqual((r["ok"], r["state_model"], r["state_model_current"]), (True, "usage-model-4", True))
+        old = copy.deepcopy(new)
+        old["state"]["model_version"] = "usage-model-3"
+        r = replay(old)
+        self.assertEqual((r["ok"], r["state_model"], r["state_model_current"]), (True, "usage-model-3", False))
+        del old["state"]["model_version"]
+        self.assertEqual(replay(old)["state_model"], None)                 # 판본이 없는 기록은 모름이다
+        self.assertFalse(replay(old)["state_model_current"])
+
     def test_run_record_links_to_decision_by_id_only(self):
         """텔레메트리(RunRecord)에는 결정의 id 만, 결정 기록은 따로 원장에 -- 결정 먼저, 실행이 그 id 를 가리킨다."""
         import tempfile

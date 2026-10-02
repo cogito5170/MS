@@ -155,22 +155,29 @@ PROMPT_SELECTORS = {c.version: c for c in (FixedPrompt(), AdaptivePrompt())}
 
 
 def replay(policy_record: dict) -> dict:
-    """결정 기록(ms/decision_record.py -- 상태 · 판본 · 입력)으로 계획을 다시 계산한다. 같으면 {"ok": True}."""
+    """결정 기록(ms/decision_record.py -- 상태 · 판본 · 입력)으로 계획을 다시 계산한다. 같으면 {"ok": True}.
+
+    재현하는 것은 **정책**(상태 -> 계획)이다. 상태 자체는 다시 계산하지 않는다 -- 원 측정은 결정 기록에 없다. 그래서 상태를 낸
+    모형의 판본(`state_model`)을 결과에 붙이고, 지금 판본과 같은지(`state_model_current`)를 적는다. 사용 모형이 바뀌면
+    (예: usage-model-3 -> 4, PC-03) 옛 기록도 정책은 그대로 재현되지만, **다른 판본의 상태 위에서 낸 결정**으로 갈라 읽어야 한다."""
+    from .usage_model import MODEL_VERSION
     st = policy_record["state"]
+    model = st.get("model_version")
+    marks = {"state_model": model, "state_model_current": model == MODEL_VERSION}
     out, ok = {}, True
     c = policy_record["context_policy"]
     sel = CONTEXT_SELECTORS.get(c["version"])
     if sel is None:
-        return {"ok": False, "why": f"모르는 맥락 정책 판본 {c['version']}"}
+        return {"ok": False, "why": f"모르는 맥락 정책 판본 {c['version']}", **marks}
     again = sel.plan(st, policy_record["inputs"]["base_context"])
     out["context"] = again["params"] == c["params"]
     p = policy_record["prompt_policy"]
     psel = PROMPT_SELECTORS.get(p["version"])
     if psel is None:
-        return {"ok": False, "why": f"모르는 프롬프트 정책 판본 {p['version']}"}
+        return {"ok": False, "why": f"모르는 프롬프트 정책 판본 {p['version']}", **marks}
     out["prompt"] = psel.plan(st)["plan"] == p["plan"]
     pv = policy_record["provider_policy"]
     if pv["version"] == ExplicitProvider.version:
         out["provider"] = pv["provider"] == (pv.get("requested") or policy_record["inputs"]["default_provider"])
     ok = all(out.values())
-    return {"ok": ok, **out}
+    return {"ok": ok, **out, **marks}
