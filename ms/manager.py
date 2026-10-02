@@ -9,10 +9,12 @@ unbound · rejected 는 격리함(`quarantine`)에 마지막 몇 개만 남는�
 
 모형이 `role: evidence` 로 적은 속성은 그래프가 아니라 `evidence` 창(최근 `window` 개)에 쌓이고, 파생 상태의 입력으로만 쓰인다.
 그래서 질의(→ LLM)로는 원 측정이 보이지 않는다 -- 보이는 것은 모형이 해석한 상태뿐이다.
+
+**시계는 주입받는다**(PC-12 · BV-09). 기본 시계가 없다 -- 만드는 쪽(Runtime · CLI · 평가)이 정한다. 시각이 없는 관측은 받을 때 이 시계로 찍는다.
 """
 from __future__ import annotations
 
-import time
+import dataclasses
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 
@@ -32,7 +34,7 @@ class IngestResult:
 
 
 class StateManager:
-    def __init__(self, models=(), relationships=(), clock=time.time, quarantine_size: int = 100):
+    def __init__(self, models=(), relationships=(), *, clock, quarantine_size: int = 100):
         self.models: dict = {}
         self.relationships: dict = {}
         self.graph = StateGraph()
@@ -94,6 +96,8 @@ class StateManager:
 
     def ingest(self, t) -> IngestResult:
         t = t if isinstance(t, Telemetry) else Telemetry.from_dict(t)
+        if t.ts is None:
+            t = dataclasses.replace(t, ts=self.clock())
         node = self.graph.nodes.get(t.entity)
         if node is None:
             return self._refuse(UNBOUND, t, f"개체 {t.entity} 가 없다")
@@ -179,7 +183,7 @@ class StateManager:
         return ttl is not None and self.age(nid, prop) > ttl
 
     @classmethod
-    def from_spec(cls, spec: dict, clock=time.time) -> "StateManager":
+    def from_spec(cls, spec: dict, *, clock) -> "StateManager":
         m = cls(spec.get("models", ()), spec.get("relationships", ()), clock=clock)
         for e in spec.get("entities", ()):
             m.declare(e["id"], e["model"])

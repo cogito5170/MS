@@ -778,6 +778,39 @@ class ContextActions(unittest.TestCase):
         self.assertEqual(set(ctx.decisions), ids)
 
 
+class OneClock(unittest.TestCase):
+    """PC-12: 시계는 하나다 -- State Manager 에 주입한 것. 텔레메트리는 시계를 읽지 않고, Runtime 은 두 시계를 거절한다."""
+
+    def test_nothing_reads_the_wall_clock(self):
+        from unittest import mock
+        spec, m, reg, *_ = world(clock=Clock(1234.0))
+        with mock.patch("time.time", side_effect=AssertionError("벽시계를 읽었다")):
+            rt = Runtime(m, reg, {"sim-claude": make_provider("sim-claude")})
+            rt.open_session("s", {"token_budget": 300})
+            out = rt.handle({"session": "s", "task": "srv07 을 throttle", "queries": spec["queries"]})
+            rt.feedback(out["run_id"], False)
+            r = m.ingest({"source": "bmc", "entity": "srv01", "signal": "cpu_temp", "value": 60})   # 시각 없는 관측
+        self.assertEqual(out["record"]["run"]["timestamp"], 1234.0)
+        self.assertEqual(r.status, "applied")
+        self.assertEqual(m.graph.nodes["srv01"].props["temp_c"].ts, 1234.0)        # 받을 때 주입된 시계로 찍혔다
+        self.assertTrue(all(v.ts == 1234.0 for w in m.evidence["session:s"].values() for v in w))
+
+    def test_telemetry_does_not_stamp_itself(self):
+        from ms.telemetry import Telemetry
+        self.assertIsNone(Telemetry("x", "e", "s", 1).ts)
+        self.assertIsNone(Telemetry.from_dict({"source": "x", "entity": "e", "signal": "s", "value": 1}).ts)
+
+    def test_no_default_clock(self):
+        with self.assertRaises(TypeError):
+            StateManager()
+
+    def test_two_clocks_are_refused(self):
+        spec, m, reg, *_ = world(clock=Clock(1.0))
+        with self.assertRaises(ValueError):
+            Runtime(m, reg, {"sim-claude": make_provider("sim-claude")}, usage_manager=StateManager(clock=Clock(1.0)))
+        Runtime(m, reg, {"sim-claude": make_provider("sim-claude")}, usage_manager=StateManager(clock=m.clock))  # 같은 시계면 된다
+
+
 class SuccessIsJudgedOutside(unittest.TestCase):
     """PC-13: 과업 성공은 Runtime 이 아니라 성공 기준을 가진 평가 하니스가 판정한다. Runtime 은 결과를 관측으로 받기만 한다."""
 

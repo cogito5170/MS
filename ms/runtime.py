@@ -18,6 +18,9 @@ MS 는 provider 가 아니다. 추론은 provider 가 하고, MS 는 그 위에�
 MS 는 그 패키지를 import 하지 않는다. 받은 `state` 는 사용 상태 이름(STATES)과 스칼라 값만 허락한다 -- 원 측정 · 객체를 정책 쪽으로
 몰래 넣지 못한다. `record`(예: 결정 문맥의 id · digest)는 **결정 기록**(`DecisionRecord.state_source`)에 남는다 -- 실행 기록(텔레메트리)이 아니다.
 
+**시계는 하나다**(PC-12): 세계 State Manager 의 시계. 사용 상태를 따로 두면(`usage_manager`) 같은 시계여야 한다 -- 아니면 거절한다.
+실행 시각 · 텔레메트리 시각 · 실행 id 가 모두 그 시계에서 나온다. 걸린 시간(`wall`, provider 의 지연)은 단조 시계로 재는 **길이**다.
+
 **과업 성공은 Runtime 이 판정하지 않는다**(baseline PC-13 · BV-10). 판정은 성공 기준을 가진 쪽(평가 하니스 `ms.eval.judge`)의 일이다.
 Runtime 은 요청의 `success` · `forbidden` · `expect_noop` 을 읽지 않고, 실행 기록의 `task_success` 는 None 으로 둔다. 판정한 쪽이
 `evaluation(run_id, task_success)` 로 돌려주면 그것을 사람의 고침(`feedback`)처럼 **바깥에서 온 결과 관측**으로 넣는다.
@@ -49,11 +52,14 @@ class Runtime:
                  l0_sink=None, state_reader=None):
         self.m, self.reg, self.providers = manager, registry, dict(providers)
         self.um = usage_manager or manager
+        if self.um.clock is not manager.clock:
+            raise ValueError("시계가 둘이다: usage_manager 와 manager 는 같은 시계를 써야 한다(PC-12)")
+        self.clock = manager.clock
         from .prompt import DEFAULT_LAYOUT, TEMPLATE_VERSIONS
         self.prompt_layout = prompt_layout or DEFAULT_LAYOUT
         self.template_version = TEMPLATE_VERSIONS[self.prompt_layout]
         U.install(self.um)
-        self.arbiter = Arbiter(registry, grants, clock=manager.clock)
+        self.arbiter = Arbiter(registry, grants, clock=self.clock)
         self.ctx_sel = context_selector or FixedContext()
         self.prompt_sel = prompt_selector or FixedPrompt()
         default = next(iter(self.providers)) if self.providers else None
@@ -81,7 +87,7 @@ class Runtime:
         cplan, pplan = plan["context_policy"], plan["prompt_policy"]
         choice = self.provider_policy.select(state, request)
         provider = self.providers[choice["provider"]]
-        run_id = request.get("run_id") or f"run-{next(_ids)}-{int(time.time() * 1000) % 10**8}"
+        run_id = request.get("run_id") or f"run-{next(_ids)}-{int(self.clock() * 1000) % 10**8}"
         l0rec = l0.recorder(run_id, self.l0_ledger, self.l0_sink)
         l0rec.run_start(model=choice.get("model"), provider=choice["provider"])
         pipe = Pipeline(self.m, self.reg, provider, None, self.arbiter,
@@ -98,7 +104,7 @@ class Runtime:
                       cost_usd=rec.cost["usd"] if rec.cost["source"] == "provider" else None)
         U.link_provider(self.um, sid, choice["provider"])
         matched = res.rounds[0]["context"]["matched"] if res.rounds and "context" in res.rounds[0] else None
-        for sig in rec.to_signals(sid, self.um.clock(), matched_rows=matched):
+        for sig in rec.to_signals(sid, self.clock(), matched_rows=matched):
             self.um.ingest(sig)
         self.records[rec.run["run_id"]] = rec
         self.decisions[dec.id] = dec
@@ -127,7 +133,7 @@ class Runtime:
         rec.outcome["user_correction"] = bool(user_correction)
         sid = U.session_id(rec.run["session_id"])
         r = self.um.ingest({"source": "user", "entity": sid, "signal": "outcome.user_correction",
-                            "value": bool(user_correction), "ts": self.um.clock(), "meta": {"run_id": run_id}})
+                            "value": bool(user_correction), "ts": self.clock(), "meta": {"run_id": run_id}})
         self._ledger({"kind": "feedback", "run_id": run_id, "user_correction": bool(user_correction)})
         return r
 
@@ -140,7 +146,7 @@ class Runtime:
         rec.outcome["task_success"] = bool(task_success)
         sid = U.session_id(rec.run["session_id"])
         r = self.um.ingest({"source": "evaluation", "entity": sid, "signal": "outcome.task_success",
-                            "value": bool(task_success), "ts": self.um.clock(), "meta": {"run_id": run_id}})
+                            "value": bool(task_success), "ts": self.clock(), "meta": {"run_id": run_id}})
         self._ledger({"kind": "evaluation", "run_id": run_id, "task_success": bool(task_success)})
         return r
 
@@ -200,7 +206,7 @@ class Runtime:
             state_source=state_source or {})
         return dec, RunRecord(
             run={"run_id": run_id, "session_id": request["session"], "provider": choice["provider"],
-                 "model": calls[0]["model"] if calls else choice.get("model"), "timestamp": self.m.clock(),
+                 "model": calls[0]["model"] if calls else choice.get("model"), "timestamp": self.clock(),
                  "simulated": bool(getattr(provider, "simulated", False))},
             tokens=tokens, latency=latency,
             interaction={"llm_calls": len(calls), "tool_calls": len(res.executed), "retries": retries,

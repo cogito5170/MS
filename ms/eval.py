@@ -29,7 +29,7 @@ import statistics
 import time
 
 from . import predicate
-from .cli import load
+from .cli import clock_for, load
 from .policy import AdaptiveContext, AdaptivePrompt, FixedContext, FixedPrompt
 from .providers import make_provider
 from .runtime import Runtime
@@ -68,8 +68,8 @@ def judge(world, task: dict, executed: list):
     return True
 
 
-def _world(tasks_file: dict, task: dict):
-    spec, m, reg, _ = load(tasks_file["world"]["spec"], tasks_file["world"]["telemetry"])
+def _world(tasks_file: dict, task: dict, clock):
+    spec, m, reg, _ = load(tasks_file["world"]["spec"], tasks_file["world"]["telemetry"], clock=clock)
     for t in task.get("extra_telemetry") or []:
         m.ingest(t)
     return spec, m, reg
@@ -83,7 +83,9 @@ class Lane:
         self.pname, model = parse_slot(slots[slot])
         self.provider = make_provider(self.pname, model, **(provider_kw or {}).get(self.pname, {}))
         self.letter, self.rep, self.tf = letter, rep, tasks_file
-        self.usage = StateManager(clock=time.time)
+        with open(tasks_file["world"]["spec"], encoding="utf-8") as f:
+            self.clock = clock_for(json.load(f))        # 시계 하나: 이 세션의 사용 상태와 과업마다 새로 짓는 세계가 같이 쓴다(PC-12)
+        self.usage = StateManager(clock=self.clock)
         install(self.usage)
         self.sess, self.opened = f"{letter}-r{rep}", False
         self.layout, self.fresh = layout, fresh          # fresh: 이 평가 실행의 표지(None 이면 안 붙임)
@@ -91,7 +93,7 @@ class Lane:
     def run_task(self, task, log=print) -> dict:
         tf, row = self.tf, None
         for attempt in (0, 1):
-            spec, world, reg = _world(tf, task)
+            spec, world, reg = _world(tf, task, self.clock)
             rt = Runtime(world, reg, {self.pname: self.provider}, grants=tf.get("grants", ()),
                          context_selector=AdaptiveContext() if self.cmode == "adaptive" else FixedContext(),
                          prompt_selector=AdaptivePrompt() if self.pmode == "adaptive" else FixedPrompt(),
