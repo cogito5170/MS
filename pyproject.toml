@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ms"
-version = "0.2.0"
+version = "0.3.0"
 description = "MS -- LLM Policy Runtime: provider 독립 텔레메트리 · 상태 · 맥락/프롬프트/provider 정책 · WALP 중재자"
 readme = "README.md"
 requires-python = ">=3.10"
