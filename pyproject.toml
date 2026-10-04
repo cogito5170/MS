@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ms"
-version = "0.3.0"
+version = "0.3.1"
 description = "MS -- LLM Policy Runtime: provider 독립 텔레메트리 · 상태 · 맥락/프롬프트/provider 정책 · WALP 중재자"
 readme = "README.md"
 requires-python = ">=3.10"
 # action 계약 · 명세 · 술어 한 벌 · 실행기(BD-108 · BD-111). 필수 의존이다 -- 커밋 sha 로 고정한다(guard · health 와 같은 sha)
-dependencies = ["action-contract @ git+https://github.com/cogito5170/action@3995fdb3ba487f31d841d3e11b710e64f0d523db"]
+dependencies = ["action-contract @ git+https://github.com/cogito5170/action@9d6729fc6809d68d2b5d55b4ad2fd37e5281d998"]
 
 # Sensor extras 는 두지 않는다(CMD-M27 · BD-123) -- MS 는 Sensor 를 import 하지 않고(BD-46) 상태는 DC 로 온다. sha 없는 extras 는
 # 고정된 Sensor 와 함께 깔 때 ResolutionImpossible 을 냈다. 함께 쓰려면 rlo-SDK `[sensor]` 또는 고정된 Sensor 를 따로 깐다
